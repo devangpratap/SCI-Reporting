@@ -1,0 +1,44 @@
+{
+  "recommendations": [
+    {
+      "id": "r1",
+      "priority": 1,
+      "type": "integrate",
+      "title": "Sync PO metadata from Order Management to Finance",
+      "linked_gap": "g1",
+      "estimated_hours_saved_per_month": 40,
+      "estimated_roi": "high",
+      "rationale": "Highest hours lost, straightforward API mapping"
+    },
+    {
+      "id": "r2",
+      "priority": 2,
+      "type": "automate",
+      "title": "Auto-classify and route support tickets by account tier",
+      "linked_gap": "g2",
+      "estimated_hours_saved_per_month": 20,
+      "estimated_roi": "medium",
+      "rationale": "Repetitive, deterministic — high automation confidence"
+    },
+    {
+      "id": "r3",
+      "priority": 3,
+      "type": "integrate",
+      "title": "Push new hire role from HR to IT provisioning on hire event",
+      "linked_gap": "g3",
+      "estimated_hours_saved_per_month": 15,
+      "estimated_roi": "medium",
+      "rationale": "Simple event-driven integration, low risk"
+    },
+    {
+      "id": "r4",
+      "priority": 4,
+      "type": "preserve",
+      "title": "Keep vendor dispute resolution as human-handled",
+      "linked_gap": null,
+      "estimated_hours_saved_per_month": 0,
+      "estimated_roi": "none",
+      "rationale": "Requires negotiation and judgment — automation would reduce quality"
+    }
+  ]
+}

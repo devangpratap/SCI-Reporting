@@ -1,0 +1,39 @@
+{
+  "stalls": [
+    {
+      "id": "s1",
+      "task_id": "a2",
+      "description": "Schema definition has not reached downstream reporting team",
+      "stall_type": "undelivered_decision",
+      "severity": "high",
+      "unresponsive_since": "2026-04-09T12:00:00Z",
+      "affected_teams": ["reporting", "graph"]
+    },
+    {
+      "id": "s2",
+      "task_id": "a1",
+      "description": "Databricks setup blocked, no action from owner in 24h",
+      "stall_type": "unresponsive_owner",
+      "severity": "medium",
+      "unresponsive_since": "2026-04-09T10:00:00Z",
+      "affected_teams": ["ingestion"]
+    }
+  ],
+  "nodes": [
+    { "id": "n1", "label": "Ingest Comms Data", "team": "ingestion", "status": "in_progress" },
+    { "id": "n2", "label": "Extract Decisions", "team": "nlp", "status": "pending" },
+    { "id": "n3", "label": "Classify Tasks", "team": "ml", "status": "pending" },
+    { "id": "n4", "label": "Detect Stalls", "team": "nlp", "status": "pending" },
+    { "id": "n5", "label": "Reporting Dashboard", "team": "reporting", "status": "in_progress" },
+    { "id": "n6", "label": "Automation Roadmap", "team": "ml", "status": "pending" }
+  ],
+  "edges": [
+    { "id": "e1", "source": "n1", "target": "n2" },
+    { "id": "e2", "source": "n2", "target": "n4" },
+    { "id": "e3", "source": "n2", "target": "n5" },
+    { "id": "e4", "source": "n3", "target": "n5" },
+    { "id": "e5", "source": "n4", "target": "n5" },
+    { "id": "e6", "source": "n3", "target": "n6" },
+    { "id": "e7", "source": "n6", "target": "n5" }
+  ]
+}

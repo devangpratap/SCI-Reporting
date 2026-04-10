@@ -1,0 +1,54 @@
+{
+  "tasks": [
+    {
+      "id": "t1",
+      "role": "Account Manager",
+      "workflow": "Client Onboarding",
+      "description": "Send welcome email with portal login",
+      "classification": "ASSEMBLY",
+      "confidence": 0.95,
+      "decision_points": [],
+      "dependencies": []
+    },
+    {
+      "id": "t2",
+      "role": "Account Manager",
+      "workflow": "Client Onboarding",
+      "description": "Assess client needs in kickoff call",
+      "classification": "JUDGMENT",
+      "confidence": 0.90,
+      "decision_points": ["requires empathy", "open-ended discovery"],
+      "dependencies": ["t1"]
+    },
+    {
+      "id": "t3",
+      "role": "Finance Analyst",
+      "workflow": "Invoice Reconciliation",
+      "description": "Match invoice line items to PO numbers",
+      "classification": "ASSEMBLY",
+      "confidence": 0.88,
+      "decision_points": [],
+      "dependencies": []
+    },
+    {
+      "id": "t4",
+      "role": "Finance Analyst",
+      "workflow": "Invoice Reconciliation",
+      "description": "Resolve disputed charges with vendor",
+      "classification": "JUDGMENT",
+      "confidence": 0.92,
+      "decision_points": ["negotiation", "judgment call"],
+      "dependencies": ["t3"]
+    },
+    {
+      "id": "t5",
+      "role": "Support Agent",
+      "workflow": "Ticket Triage",
+      "description": "Classify and route incoming support tickets",
+      "classification": "ASSEMBLY_JUDGMENT",
+      "confidence": 0.80,
+      "decision_points": ["ambiguous categories"],
+      "dependencies": []
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "gaps": [
+    {
+      "id": "g1",
+      "source_system": "Order Management",
+      "target_system": "Finance",
+      "missing_data": "PO metadata not passed on order close",
+      "downstream_task": "Manual invoice reconciliation",
+      "staff_hours_lost_per_month": 40,
+      "error_rate": 0.12,
+      "avg_delay_days": 2.5
+    },
+    {
+      "id": "g2",
+      "source_system": "CRM",
+      "target_system": "Support",
+      "missing_data": "Account tier not synced to ticket system",
+      "downstream_task": "Manual priority assignment on each ticket",
+      "staff_hours_lost_per_month": 20,
+      "error_rate": 0.08,
+      "avg_delay_days": 0.5
+    },
+    {
+      "id": "g3",
+      "source_system": "HR",
+      "target_system": "IT Provisioning",
+      "missing_data": "New hire role not sent to provisioning system",
+      "downstream_task": "IT manually emails manager to confirm access list",
+      "staff_hours_lost_per_month": 15,
+      "error_rate": 0.05,
+      "avg_delay_days": 1.0
+    }
+  ],
+  "simulation": {
+    "role": "Finance Analyst",
+    "cases_per_month": 50,
+    "current_assembly_pct": 0.65,
+    "target_assembly_pct": 0.15,
+    "current_throughput": 50,
+    "projected_throughput": 143
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "decisions": [
+    {
+      "id": "d1",
+      "summary": "Use Databricks as the primary data warehouse",
+      "rationale": "Sponsored access provided, team familiar with SQL",
+      "participants": ["alice@acme.com", "bob@acme.com"],
+      "status": "closed",
+      "timestamp": "2026-04-08T10:00:00Z"
+    },
+    {
+      "id": "d2",
+      "summary": "Defer mobile dashboard to post-hackathon",
+      "rationale": "Time constraints, web-first is sufficient for demo",
+      "participants": ["alice@acme.com"],
+      "status": "closed",
+      "timestamp": "2026-04-09T14:00:00Z"
+    }
+  ],
+  "action_items": [
+    {
+      "id": "a1",
+      "description": "Set up Databricks workspace and share credentials",
+      "owner": "bob@acme.com",
+      "deadline": "2026-04-11T10:00:00Z",
+      "status": "open"
+    },
+    {
+      "id": "a2",
+      "description": "Define table schemas for all verticals",
+      "owner": "alice@acme.com",
+      "deadline": "2026-04-11T12:00:00Z",
+      "status": "open"
+    }
+  ],
+  "blockers": [
+    {
+      "id": "b1",
+      "description": "Databricks credentials not available until April 11",
+      "blocking": ["a1", "a2"],
+      "raised_by": "alice@acme.com",
+      "status": "active",
+      "timestamp": "2026-04-10T09:00:00Z"
+    }
+  ]
+}
