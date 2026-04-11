@@ -238,8 +238,8 @@ async function refreshReports(targetOrgId = null) {
 
 function startAutoRefresh() {
   refreshReports();
-  setInterval(refreshReports, 60 * 60 * 1000);
-  console.log("[reports] auto-refresh started — every 1h");
+  setInterval(refreshReports, 12 * 60 * 60 * 1000);
+  console.log("[reports] auto-refresh started — every 12h");
 }
 
 module.exports = { refreshReports, startAutoRefresh };
