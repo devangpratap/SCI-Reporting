@@ -124,7 +124,11 @@ const TOOLS = [
     type: "function",
     function: {
       name: "get_integration_gaps",
-      description: "Get integration gaps and their cost in hours lost per month (P11).",
+      description:
+        "Returns a live snapshot of every integration gap — places where data should flow automatically between systems but does not, forcing humans into assembly work (copying, reconciling, re-entering data) instead of judgment work. " +
+        "Each gap includes: source and target system, what data is missing, which downstream task is blocked or degraded, staff hours lost per month to manual workaround, error rate introduced by the manual step, and average delay in days. " +
+        "Also returns a throughput simulation: a role handling ~50 cases/month at 65% assembly time is projected forward to 15% assembly — quantifying the capacity multiplier from fixing each integration. " +
+        "This data is refreshed on every reporting cycle and reflects the current state of system connectivity costs across the organisation, regardless of industry.",
       parameters: { type: "object", properties: {} },
     },
   },
@@ -132,7 +136,11 @@ const TOOLS = [
     type: "function",
     function: {
       name: "get_roadmap",
-      description: "Get the prioritised automation roadmap (P12).",
+      description:
+        "Returns a live, prioritized automation roadmap derived from task classifications and integration gap costs — refreshed every reporting cycle. " +
+        "Each recommendation has a type: 'automate' (ASSEMBLY tasks a machine can fully handle), 'integrate' (P11 gaps generating the highest hidden costs in hours and error rates), or 'preserve' (JUDGMENT tasks requiring human expertise that must not be automated). " +
+        "Recommendations are ordered by economic impact: blockers with the most downstream tasks affected come first, followed by high-volume pending assembly work, followed by strategic judgment-preservation decisions. " +
+        "Each item includes estimated hours saved per month and an ROI signal, giving operations leaders a concrete, economically grounded view of where to invest to unlock scalable growth — applicable across any industry where throughput is constrained by manual assembly work.",
       parameters: {
         type: "object",
         properties: {
