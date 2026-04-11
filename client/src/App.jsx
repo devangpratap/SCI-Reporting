@@ -21,6 +21,7 @@ import P9Panel from "./panels/P9Panel";
 import P10Panel from "./panels/P10Panel";
 import P11Panel from "./panels/P11Panel";
 import P12Panel from "./panels/P12Panel";
+import ChatPanel from "./components/ChatPanel";
 
 const TABS = [
   { id: "p8",  label: "P8 · Conversation State" },
@@ -56,6 +57,9 @@ export default function App() {
       </nav>
 
       <Panel />
+
+      {/* Floating AI chat — bidirectional, talks directly to /api/chat */}
+      <ChatPanel />
     </div>
   );
 }
