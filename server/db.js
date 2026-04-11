@@ -55,28 +55,45 @@ async function queryDatabricks(sql) {
   return result;
 }
 
-// ── Query functions (one per vertical) ────────────────────────────────────
+// ── Org helpers ────────────────────────────────────────────────────────────
 
-async function getP8() {
+// Returns all distinct org_ids present in Databricks
+async function getOrgIds() {
+  if (!USE_DATABRICKS) return ["mock-org"];
+  const rows = await queryDatabricks("SELECT DISTINCT org_id FROM sci_p8_decisions");
+  return rows.map(r => r.org_id).filter(Boolean);
+}
+
+// Build a WHERE clause fragment — safe literal (org_id is an opaque string, not user SQL)
+function orgFilter(orgId) {
+  return orgId ? `WHERE org_id = '${orgId.replace(/'/g, "''")}'` : "";
+}
+
+// ── Query functions (one per vertical) ────────────────────────────────────
+// All accept an optional orgId — filters every query to that org's rows only.
+// Mock mode ignores orgId (single-org mock data).
+
+async function getP8(orgId) {
   if (!USE_DATABRICKS) return readMock("p8_conversations.json");
+  const f = orgFilter(orgId);
   const [decisions, action_items, blockers] = await Promise.all([
-    queryDatabricks("SELECT * FROM sci_p8_decisions"),
-    queryDatabricks("SELECT * FROM sci_p8_action_items"),
-    queryDatabricks("SELECT * FROM sci_p8_blockers"),
+    queryDatabricks(`SELECT * FROM sci_p8_decisions ${f}`),
+    queryDatabricks(`SELECT * FROM sci_p8_action_items ${f}`),
+    queryDatabricks(`SELECT * FROM sci_p8_blockers ${f}`),
   ]);
   return { decisions, action_items, blockers };
 }
 
-async function getP9() {
+async function getP9(orgId) {
   if (!USE_DATABRICKS) {
     const data = readMock("p9_stalls.json");
     return { stalls: data.stalls };
   }
-  const stalls = await queryDatabricks("SELECT * FROM sci_p9_stalls");
+  const stalls = await queryDatabricks(`SELECT * FROM sci_p9_stalls ${orgFilter(orgId)}`);
   return { stalls };
 }
 
-async function getGraph() {
+async function getGraph(orgId) {
   let nodes, edges, stalls;
 
   if (!USE_DATABRICKS) {
@@ -85,10 +102,11 @@ async function getGraph() {
     edges = data.edges;
     stalls = data.stalls;
   } else {
+    const f = orgFilter(orgId);
     ([nodes, edges, stalls] = await Promise.all([
-      queryDatabricks("SELECT * FROM sci_p9_nodes"),
-      queryDatabricks("SELECT * FROM sci_p9_edges"),
-      queryDatabricks("SELECT * FROM sci_p9_stalls"),
+      queryDatabricks(`SELECT * FROM sci_p9_nodes ${f}`),
+      queryDatabricks(`SELECT * FROM sci_p9_edges ${f}`),
+      queryDatabricks(`SELECT * FROM sci_p9_stalls ${f}`),
     ]));
   }
 
@@ -154,16 +172,16 @@ async function getGraph() {
   return { nodes: annotatedNodes, edges: annotatedEdges };
 }
 
-async function getP10() {
+async function getP10(orgId) {
   if (!USE_DATABRICKS) return readMock("p10_workflows.json");
-  const tasks = await queryDatabricks("SELECT * FROM sci_p10_tasks");
+  const tasks = await queryDatabricks(`SELECT * FROM sci_p10_tasks ${orgFilter(orgId)}`);
   return { tasks };
 }
 
-async function getP11() {
+async function getP11(orgId) {
   if (!USE_DATABRICKS) return readMock("p11_gaps.json");
-  const gaps = await queryDatabricks("SELECT * FROM sci_p11_gaps");
-  // simulation is derived, not stored — calculate from gaps data
+  const f = orgFilter(orgId);
+  const gaps = await queryDatabricks(`SELECT * FROM sci_p11_gaps ${f}`);
   const simulation = {
     role: "CSM",
     cases_per_month: 47,
@@ -175,7 +193,7 @@ async function getP11() {
   return { gaps, simulation };
 }
 
-async function getP12() {
+async function getP12(orgId) {
   if (!USE_DATABRICKS) {
     const data = readMock("p12_roadmap.json");
     const gaps = readMock("p11_gaps.json").gaps;
@@ -187,9 +205,10 @@ async function getP12() {
       })),
     };
   }
+  const f = orgFilter(orgId);
   const [recs, gaps] = await Promise.all([
-    queryDatabricks("SELECT * FROM sci_p12_recommendations ORDER BY priority ASC"),
-    queryDatabricks("SELECT id, missing_data FROM sci_p11_gaps"),
+    queryDatabricks(`SELECT * FROM sci_p12_recommendations ${f} ORDER BY priority ASC`),
+    queryDatabricks(`SELECT id, missing_data FROM sci_p11_gaps ${f}`),
   ]);
   const gapMap = Object.fromEntries(gaps.map(g => [g.id, g.missing_data]));
   return {
@@ -200,4 +219,4 @@ async function getP12() {
   };
 }
 
-module.exports = { getP8, getP9, getGraph, getP10, getP11, getP12 };
+module.exports = { getP8, getP9, getGraph, getP10, getP11, getP12, getOrgIds };

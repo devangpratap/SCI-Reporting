@@ -48,9 +48,10 @@ app.post("/api/chat", async (req, res) => {
   }
 });
 
-// Manual report refresh — call this after Databricks data changes to force an immediate write
-app.post("/api/reports/refresh", async (_, res) => {
-  const result = await refreshReports();
+// Manual report refresh — call after Databricks data changes to force an immediate write
+// Body: { org_id?: string } — omit to refresh all orgs
+app.post("/api/reports/refresh", async (req, res) => {
+  const result = await refreshReports(req.body?.org_id || null);
   res.json(result);
 });
 

@@ -16,6 +16,7 @@
 */
 
 const { Pool } = require("pg");
+const { randomUUID } = require("crypto");
 const db = require("./db");
 
 const pool = new Pool({
@@ -31,11 +32,16 @@ const pool = new Pool({
 
 async function ensureTable() {
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS sci_static_reports (
-      panel      VARCHAR(10) PRIMARY KEY,
-      content_md TEXT        NOT NULL,
-      updated_at TIMESTAMP   NOT NULL DEFAULT NOW()
+    CREATE TABLE IF NOT EXISTS static_reporting (
+      id                 TEXT PRIMARY KEY,
+      org_id             TEXT        NOT NULL,
+      contents           TEXT        NOT NULL,
+      timestamp_created  BIGINT      NOT NULL,
+      simple_overview    TEXT        NOT NULL
     )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_static_reporting_org_id ON static_reporting(org_id)
   `);
 }
 
@@ -113,9 +119,67 @@ function fmtP12({ recommendations }) {
   return lines.join("\n");
 }
 
+// ── Simple overview generators (one line per panel) ───────────────────────
+
+function overviewP8({ decisions, action_items, blockers }) {
+  const overdue = action_items.filter(a => a.status === "open" && new Date(a.deadline) < Date.now()).length;
+  return `${decisions.length} decisions · ${action_items.filter(a => a.status === "open").length} open items${overdue ? ` · ${overdue} overdue` : ""} · ${blockers.filter(b => b.status === "active").length} active blockers`;
+}
+
+function overviewP9({ stalls }) {
+  const high = stalls.filter(s => s.severity === "high").length;
+  return `${stalls.length} stalls${high ? ` (${high} high severity)` : ""} · teams affected: ${[...new Set(stalls.flatMap(s => s.affected_teams))].join(", ") || "none"}`;
+}
+
+function overviewP10({ tasks }) {
+  const auto = tasks.filter(t => t.classification === "ASSEMBLY").length;
+  const pct = Math.round((auto / tasks.length) * 100);
+  return `${tasks.length} tasks · ${pct}% fully automatable · ${tasks.filter(t => t.classification === "JUDGMENT").length} require human judgment`;
+}
+
+function overviewP11({ gaps, simulation }) {
+  const total = gaps.reduce((s, g) => s + g.staff_hours_lost_per_month, 0);
+  const mult = (simulation.projected_throughput / simulation.current_throughput).toFixed(1);
+  return `${gaps.length} integration gaps · ${total}h lost/month · ${mult}× throughput potential`;
+}
+
+function overviewP12({ recommendations }) {
+  const totalSaved = recommendations.reduce((s, r) => s + r.estimated_hours_saved_per_month, 0);
+  return `${recommendations.length} recommendations · ${totalSaved}h/month savings potential · top priority: ${recommendations[0]?.title ?? "none"}`;
+}
+
+// ── Write all reports to Postgres for one org ──────────────────────────────
+
+async function writeOrgReports(orgId) {
+  const [p8, p9, p10, p11, p12] = await Promise.all([
+    db.getP8(orgId), db.getP9(orgId), db.getP10(orgId),
+    db.getP11(orgId), db.getP12(orgId),
+  ]);
+
+  const reports = [
+    { panel: "p8",  contents: fmtP8(p8),   simple_overview: overviewP8(p8)   },
+    { panel: "p9",  contents: fmtP9(p9),   simple_overview: overviewP9(p9)   },
+    { panel: "p10", contents: fmtP10(p10), simple_overview: overviewP10(p10) },
+    { panel: "p11", contents: fmtP11(p11), simple_overview: overviewP11(p11) },
+    { panel: "p12", contents: fmtP12(p12), simple_overview: overviewP12(p12) },
+  ];
+
+  const now = Math.floor(Date.now() / 1000); // Unix epoch int
+
+  for (const r of reports) {
+    await pool.query(
+      `INSERT INTO static_reporting (id, org_id, contents, timestamp_created, simple_overview)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [randomUUID(), orgId, r.contents, now, r.simple_overview]
+    );
+  }
+
+  return reports.map(r => r.panel);
+}
+
 // ── Write all reports to Postgres ─────────────────────────────────────────
 
-async function refreshReports() {
+async function refreshReports(targetOrgId = null) {
   if (!process.env.POSTGRES_HOST) {
     console.log("[reports] POSTGRES_HOST not set — skipping write");
     return { skipped: true, reason: "no postgres credentials" };
@@ -124,30 +188,18 @@ async function refreshReports() {
   try {
     await ensureTable();
 
-    const [p8, p9, p10, p11, p12] = await Promise.all([
-      db.getP8(), db.getP9(), db.getP10(), db.getP11(), db.getP12(),
-    ]);
+    // Refresh one org or all orgs
+    const orgIds = targetOrgId ? [targetOrgId] : await db.getOrgIds();
+    const results = [];
 
-    const reports = [
-      { panel: "p8",  content_md: fmtP8(p8)   },
-      { panel: "p9",  content_md: fmtP9(p9)   },
-      { panel: "p10", content_md: fmtP10(p10) },
-      { panel: "p11", content_md: fmtP11(p11) },
-      { panel: "p12", content_md: fmtP12(p12) },
-    ];
-
-    for (const r of reports) {
-      await pool.query(
-        `INSERT INTO sci_static_reports (panel, content_md, updated_at)
-         VALUES ($1, $2, NOW())
-         ON CONFLICT (panel) DO UPDATE SET content_md = $2, updated_at = NOW()`,
-        [r.panel, r.content_md]
-      );
+    for (const orgId of orgIds) {
+      const panels = await writeOrgReports(orgId);
+      results.push({ orgId, panels });
     }
 
     const at = new Date().toISOString();
-    console.log(`[reports] wrote ${reports.length} panels to postgres at ${at}`);
-    return { refreshed: reports.map(r => r.panel), at };
+    console.log(`[reports] wrote ${results.length} org(s) to postgres at ${at}`);
+    return { refreshed: results, at };
   } catch (err) {
     console.error("[reports] write failed:", err.message);
     return { error: err.message };

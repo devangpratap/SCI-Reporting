@@ -78,13 +78,14 @@ const TOOLS = [
   },
 ];
 
-async function executeTool(name) {
+// orgId scopes every tool call to that org's rows only
+async function executeTool(name, orgId) {
   switch (name) {
-    case "get_conversation_state": return db.getP8();
-    case "get_stalls":             return db.getP9();
-    case "get_workflow_map":       return db.getP10();
-    case "get_integration_gaps":   return db.getP11();
-    case "get_roadmap":            return db.getP12();
+    case "get_conversation_state": return db.getP8(orgId);
+    case "get_stalls":             return db.getP9(orgId);
+    case "get_workflow_map":       return db.getP10(orgId);
+    case "get_integration_gaps":   return db.getP11(orgId);
+    case "get_roadmap":            return db.getP12(orgId);
     default: return { error: `unknown tool: ${name}` };
   }
 }
@@ -112,8 +113,11 @@ function appendUiTurns(existingUiHistory, userMessage, assistantText) {
 
 // ── Main export ────────────────────────────────────────────────────────────
 
-// user_token: forwarded for future auth — not used internally yet
+// user_token carries org_id — all tool calls are scoped to that org's data only
+// Resolution: for now user_token IS the org_id directly.
+// When auth is added Saturday, swap this for a token→org_id lookup.
 async function chat(message, uiHistory = [], userToken = null) {
+  const orgId = userToken || null; // userToken = org_id until auth layer is added
   const anthropic = new Anthropic.default({ apiKey: process.env.ANTHROPIC_API_KEY });
 
   // Convert UI history to Claude format, append new user message
@@ -145,7 +149,7 @@ async function chat(message, uiHistory = [], userToken = null) {
       const toolResults = [];
       for (const block of response.content) {
         if (block.type !== "tool_use") continue;
-        const result = await executeTool(block.name);
+        const result = await executeTool(block.name, orgId);
         toolResults.push({
           type: "tool_result",
           tool_use_id: block.id,
