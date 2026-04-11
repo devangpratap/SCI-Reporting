@@ -79,13 +79,39 @@ const TOOLS = [
 ];
 
 // orgId scopes every tool call to that org's rows only
-async function executeTool(name, orgId) {
+// input contains the filter params Claude chose (e.g. severity: "high")
+async function executeTool(name, orgId, input = {}) {
   switch (name) {
-    case "get_conversation_state": return db.getP8(orgId);
-    case "get_stalls":             return db.getP9(orgId);
-    case "get_workflow_map":       return db.getP10(orgId);
-    case "get_integration_gaps":   return db.getP11(orgId);
-    case "get_roadmap":            return db.getP12(orgId);
+    case "get_conversation_state": {
+      const data = await db.getP8(orgId);
+      const s = input.filter_status;
+      if (!s || s === "all") return data;
+      return {
+        decisions:    data.decisions.filter(d => d.status === s),
+        action_items: data.action_items.filter(a => a.status === s),
+        blockers:     data.blockers.filter(b => b.status === s),
+      };
+    }
+    case "get_stalls": {
+      const data = await db.getP9(orgId);
+      if (!input.severity || input.severity === "all") return data;
+      return { stalls: data.stalls.filter(s => s.severity === input.severity) };
+    }
+    case "get_workflow_map": {
+      const data = await db.getP10(orgId);
+      let tasks = data.tasks;
+      if (input.classification && input.classification !== "all")
+        tasks = tasks.filter(t => t.classification === input.classification);
+      if (input.workflow)
+        tasks = tasks.filter(t => t.workflow === input.workflow);
+      return { tasks };
+    }
+    case "get_integration_gaps": return db.getP11(orgId);
+    case "get_roadmap": {
+      const data = await db.getP12(orgId);
+      if (!input.type || input.type === "all") return data;
+      return { recommendations: data.recommendations.filter(r => r.type === input.type) };
+    }
     default: return { error: `unknown tool: ${name}` };
   }
 }
@@ -117,6 +143,8 @@ function appendUiTurns(existingUiHistory, userMessage, assistantText) {
 // Resolution: for now user_token IS the org_id directly.
 // When auth is added Saturday, swap this for a token→org_id lookup.
 async function chat(message, uiHistory = [], userToken = null) {
+  if (!process.env.ANTHROPIC_API_KEY)
+    throw new Error("ANTHROPIC_API_KEY not set in .env — required for chat");
   const orgId = userToken || null; // userToken = org_id until auth layer is added
   const anthropic = new Anthropic.default({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -149,7 +177,7 @@ async function chat(message, uiHistory = [], userToken = null) {
       const toolResults = [];
       for (const block of response.content) {
         if (block.type !== "tool_use") continue;
-        const result = await executeTool(block.name, orgId);
+        const result = await executeTool(block.name, orgId, block.input ?? {});
         toolResults.push({
           type: "tool_result",
           tool_use_id: block.id,

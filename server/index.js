@@ -25,12 +25,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.get("/api/p8",       async (_, res) => res.json(await getP8()));
-app.get("/api/p9",       async (_, res) => res.json(await getP9()));
-app.get("/api/p9/graph", async (_, res) => res.json(await getGraph()));
-app.get("/api/p10",      async (_, res) => res.json(await getP10()));
-app.get("/api/p11",      async (_, res) => res.json(await getP11()));
-app.get("/api/p12",      async (_, res) => res.json(await getP12()));
+// All data routes accept ?org_id=... query param to scope to one org
+// In mock mode org_id is ignored — single-org mock data returned regardless
+app.get("/api/p8",       async (req, res) => res.json(await getP8(req.query.org_id)));
+app.get("/api/p9",       async (req, res) => res.json(await getP9(req.query.org_id)));
+app.get("/api/p9/graph", async (req, res) => res.json(await getGraph(req.query.org_id)));
+app.get("/api/p10",      async (req, res) => res.json(await getP10(req.query.org_id)));
+app.get("/api/p11",      async (req, res) => res.json(await getP11(req.query.org_id)));
+app.get("/api/p12",      async (req, res) => res.json(await getP12(req.query.org_id)));
 
 // Bidirectional AI chat
 // Body:    { user_token: string, message: string, history: [{sender, message, timestamp}] }

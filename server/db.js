@@ -34,25 +34,33 @@ let _client = null;
 
 async function getDatabricksClient() {
   if (_client) return _client;
+  if (!process.env.DATABRICKS_HOST || !process.env.DATABRICKS_TOKEN)
+    throw new Error("Databricks credentials not set — check DATABRICKS_HOST and DATABRICKS_TOKEN in .env");
   const { DBSQLClient } = require("@databricks/sql");
   const client = new DBSQLClient();
   await client.connect({
-    host:     process.env.DATABRICKS_HOST,
-    path:     process.env.DATABRICKS_HTTP_PATH,
-    token:    process.env.DATABRICKS_TOKEN,
+    host:  process.env.DATABRICKS_HOST,
+    path:  process.env.DATABRICKS_HTTP_PATH,
+    token: process.env.DATABRICKS_TOKEN,
   });
   _client = client;
   return client;
 }
 
 async function queryDatabricks(sql) {
-  const client = await getDatabricksClient();
-  const session = await client.openSession();
-  const op = await session.executeStatement(sql, { runAsync: false });
-  const result = await op.fetchAll();
-  await op.close();
-  await session.close();
-  return result;
+  try {
+    const client = await getDatabricksClient();
+    const session = await client.openSession();
+    const op = await session.executeStatement(sql, { runAsync: false });
+    const result = await op.fetchAll();
+    await op.close();
+    await session.close();
+    return result;
+  } catch (err) {
+    // Reset client so next call retries the connection
+    _client = null;
+    throw new Error(`Databricks query failed: ${err.message}`);
+  }
 }
 
 // ── Org helpers ────────────────────────────────────────────────────────────
@@ -132,7 +140,8 @@ async function getGraph(orgId) {
     return max;
   }
   nodes.forEach(n => dfs(n.id));
-  const maxDist = Math.max(...Object.values(dist));
+  const distValues = Object.values(dist);
+  const maxDist = distValues.length > 0 ? Math.max(...distValues) : 0;
 
   // Trace critical path nodes
   const criticalNodes = new Set();
