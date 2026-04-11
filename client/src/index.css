@@ -209,3 +209,82 @@ body {
 
 /* ── Loading ─────────────────────────────────── */
 .loading { color: #475569; font-size: 14px; padding: 40px; text-align: center; }
+
+/* ── Overdue badge ───────────────────────────── */
+.badge-overdue { background: rgba(249,115,22,0.2); color: #fb923c; border: 1px solid rgba(249,115,22,0.35); }
+
+/* ── Pills (decision points, blocker links) ──── */
+.pill {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  margin: 3px 4px 3px 0;
+}
+.pill-judgment { background: rgba(124,58,237,0.15); color: #c084fc; border: 1px solid rgba(124,58,237,0.25); }
+.pill-blocked  { background: rgba(239,68,68,0.1);   color: #f87171; border: 1px solid rgba(239,68,68,0.2); font-size: 11px; }
+
+/* ── Workflow automation bar ─────────────────── */
+.workflow-bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255,255,255,0.06);
+  margin-left: 12px;
+  overflow: hidden;
+  align-self: center;
+}
+.workflow-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #2563eb, #4ade80);
+  transition: width 0.4s ease;
+}
+
+/* ── Hours lost bar (P11) ────────────────────── */
+.hours-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.06);
+  overflow: hidden;
+}
+.hours-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #f87171, #fb923c);
+  transition: width 0.4s ease;
+}
+
+/* ── Filter tabs (P12) ───────────────────────── */
+.filter-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.filter-tab {
+  padding: 5px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.07);
+  background: rgba(255,255,255,0.03);
+  color: #64748b;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+}
+.filter-tab:hover { background: rgba(255,255,255,0.06); color: #94a3b8; }
+.filter-tab.active { background: rgba(255,255,255,0.08); color: #e2e8f0; border-color: rgba(255,255,255,0.15); }
+.filter-tab-integrate.active { border-color: rgba(37,99,235,0.4); color: #60a5fa; background: rgba(37,99,235,0.1); }
+.filter-tab-automate.active  { border-color: rgba(22,163,74,0.4); color: #4ade80; background: rgba(22,163,74,0.1); }
+.filter-tab-preserve.active  { border-color: rgba(124,58,237,0.4); color: #c084fc; background: rgba(124,58,237,0.1); }
+.filter-tab-count {
+  background: rgba(255,255,255,0.08);
+  border-radius: 10px;
+  padding: 1px 7px;
+  font-size: 10px;
+}
