@@ -51,8 +51,8 @@ const PROPOSE_EDIT_TOOL = {
       properties: {
         table: {
           type: "string",
-          enum: ["groundswell.tasks"],
-          description: "The table that contains the record to edit. All tasks (decisions, action_items, blockers, milestones) live in groundswell.tasks.",
+          enum: ["public.tasks"],
+          description: "The table that contains the record to edit. All tasks (decisions, action_items, blockers, milestones) live in public.tasks.",
         },
         operation: {
           type: "string",

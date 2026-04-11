@@ -1,13 +1,13 @@
 /*
   db.js — Data source abstraction
 
-  All real data lives in the `groundswell` schema of Lakebase (Postgres).
+  All real data lives in the `public` schema of Lakebase (Postgres).
   Connects via DATABASE_URL with the pg driver — no Databricks SDK.
 
   DATA_SOURCE=mock     → local JSON mock files (default)
-  DATA_SOURCE=postgres → groundswell.* tables via DATABASE_URL
+  DATA_SOURCE=postgres → public.* tables via DATABASE_URL
 
-  Schema (groundswell):
+  Schema (public):
     tasks        — decisions / action_items / blockers / milestones (type column)
     edges        — source_task_id → target_task_id dependencies
     communications — source emails/docs
@@ -51,12 +51,12 @@ async function query(sql, params = []) {
 
 async function getOrgIds() {
   if (!USE_POSTGRES) return ["mock-org"];
-  const rows = await query("SELECT id FROM groundswell.orgs ORDER BY id");
+  const rows = await query("SELECT id FROM public.orgs ORDER BY id");
   return rows.map(r => r.id);
 }
 
 // ── P8 — Conversation State ────────────────────────────────────────────────
-// decisions / action_items / blockers from groundswell.tasks
+// decisions / action_items / blockers from public.tasks
 
 async function getP8(orgId) {
   if (!USE_POSTGRES) return readMock("p8_conversations.json");
@@ -74,9 +74,9 @@ async function getP8(orgId) {
              t.deadline                                                        AS timestamp,
              COALESCE(array_agg(DISTINCT i.display_name)
                FILTER (WHERE i.display_name IS NOT NULL), ARRAY[]::text[])    AS participants
-      FROM groundswell.tasks t
-      LEFT JOIN groundswell.task_owners o  ON t.id = o.task_id
-      LEFT JOIN groundswell.identities  i  ON o.identity_id = i.id
+      FROM public.tasks t
+      LEFT JOIN public.task_owners o  ON t.id = o.task_id
+      LEFT JOIN public.identities  i  ON o.identity_id = i.id
       WHERE t.type = 'decision' ${w}
       GROUP BY t.id, t.org_id, t.title, t.description, t.status, t.deadline
       ORDER BY t.deadline NULLS LAST
@@ -91,10 +91,10 @@ async function getP8(orgId) {
              COALESCE(MIN(i.display_name), 'Unassigned')                      AS owner,
              COALESCE(array_agg(DISTINCT e.target_task_id)
                FILTER (WHERE e.target_task_id IS NOT NULL), ARRAY[]::text[])  AS blocking
-      FROM groundswell.tasks t
-      LEFT JOIN groundswell.task_owners o  ON t.id = o.task_id
-      LEFT JOIN groundswell.identities  i  ON o.identity_id = i.id
-      LEFT JOIN groundswell.edges       e  ON e.source_task_id = t.id
+      FROM public.tasks t
+      LEFT JOIN public.task_owners o  ON t.id = o.task_id
+      LEFT JOIN public.identities  i  ON o.identity_id = i.id
+      LEFT JOIN public.edges       e  ON e.source_task_id = t.id
       WHERE t.type = 'action_item' ${w}
       GROUP BY t.id, t.org_id, t.title, t.status, t.deadline
       ORDER BY
@@ -111,10 +111,10 @@ async function getP8(orgId) {
              COALESCE(MIN(i.display_name), 'Unassigned')                      AS raised_by,
              COALESCE(array_agg(DISTINCT e.target_task_id)
                FILTER (WHERE e.target_task_id IS NOT NULL), ARRAY[]::text[])  AS blocking
-      FROM groundswell.tasks t
-      LEFT JOIN groundswell.task_owners o  ON t.id = o.task_id
-      LEFT JOIN groundswell.identities  i  ON o.identity_id = i.id
-      LEFT JOIN groundswell.edges       e  ON e.source_task_id = t.id
+      FROM public.tasks t
+      LEFT JOIN public.task_owners o  ON t.id = o.task_id
+      LEFT JOIN public.identities  i  ON o.identity_id = i.id
+      LEFT JOIN public.edges       e  ON e.source_task_id = t.id
       WHERE t.type = 'blocker' ${w}
       GROUP BY t.id, t.org_id, t.title, t.status, t.deadline
       ORDER BY t.status DESC
@@ -149,9 +149,9 @@ async function getP9(orgId) {
            COALESCE(array_agg(DISTINCT i.role)
              FILTER (WHERE i.role IS NOT NULL), ARRAY['Unknown'])              AS affected_teams,
            COALESCE(t.description, t.title)                                   AS context
-    FROM groundswell.tasks t
-    LEFT JOIN groundswell.task_owners o  ON t.id = o.task_id
-    LEFT JOIN groundswell.identities  i  ON o.identity_id = i.id
+    FROM public.tasks t
+    LEFT JOIN public.task_owners o  ON t.id = o.task_id
+    LEFT JOIN public.identities  i  ON o.identity_id = i.id
     WHERE t.status = 'blocked' ${w}
     GROUP BY t.id, t.org_id, t.title, t.type, t.deadline, t.description
     ORDER BY
@@ -183,21 +183,21 @@ async function getGraph(orgId) {
                t.id, t.title AS label,
                COALESCE(i.role, 'Unknown') AS team,
                t.status, t.type
-        FROM groundswell.tasks t
-        LEFT JOIN groundswell.task_owners o  ON t.id = o.task_id
-        LEFT JOIN groundswell.identities  i  ON o.identity_id = i.id
+        FROM public.tasks t
+        LEFT JOIN public.task_owners o  ON t.id = o.task_id
+        LEFT JOIN public.identities  i  ON o.identity_id = i.id
         ${w}
         ORDER BY t.id, i.display_name NULLS LAST
       `, p),
       // Edges — rename to source/target for Cytoscape
       query(`
         SELECT e.id, e.source_task_id AS source, e.target_task_id AS target
-        FROM groundswell.edges e
+        FROM public.edges e
         ${ew}
       `, p),
       // Stalls for annotation
       query(`
-        SELECT id, org_id FROM groundswell.tasks
+        SELECT id, org_id FROM public.tasks
         WHERE status = 'blocked'
         ${orgId ? "AND org_id = $1" : ""}
       `, p),
@@ -295,11 +295,11 @@ async function getP10(orgId) {
              WHEN 'blocker'  THEN ARRAY['External dependency', 'Risk assessment']::text[]
              ELSE ARRAY[]::text[]
            END                                                                 AS decision_points
-    FROM groundswell.tasks t
-    LEFT JOIN groundswell.task_owners o  ON t.id = o.task_id
-    LEFT JOIN groundswell.identities  i  ON o.identity_id = i.id
-    LEFT JOIN groundswell.provenance  pv ON pv.item_id = t.id
-    LEFT JOIN groundswell.communications c ON pv.source_comm_id = c.id
+    FROM public.tasks t
+    LEFT JOIN public.task_owners o  ON t.id = o.task_id
+    LEFT JOIN public.identities  i  ON o.identity_id = i.id
+    LEFT JOIN public.provenance  pv ON pv.item_id = t.id
+    LEFT JOIN public.communications c ON pv.source_comm_id = c.id
     WHERE 1=1 ${w}
     ORDER BY t.id, c.origin_date DESC NULLS LAST
   `, p);
@@ -325,8 +325,8 @@ async function getP11(orgId) {
            -- hours estimate: pending blocked children × 3h each
            GREATEST(1, (
              SELECT COUNT(*) * 3
-             FROM groundswell.edges     e2
-             JOIN groundswell.tasks     bt ON e2.target_task_id = bt.id
+             FROM public.edges     e2
+             JOIN public.tasks     bt ON e2.target_task_id = bt.id
              WHERE e2.source_task_id = b.id
                AND bt.status != 'completed'
            ))::integer                                                         AS staff_hours_lost_per_month,
@@ -336,13 +336,13 @@ async function getP11(orgId) {
                THEN GREATEST(1, (CURRENT_DATE - b.deadline::date))
              ELSE 3
            END                                                                 AS avg_delay_days
-    FROM groundswell.tasks b
-    LEFT JOIN groundswell.task_owners  o     ON b.id = o.task_id
-    LEFT JOIN groundswell.identities   src_i ON o.identity_id = src_i.id
-    LEFT JOIN groundswell.edges        e     ON e.source_task_id = b.id
-    LEFT JOIN groundswell.tasks        bt    ON e.target_task_id = bt.id
-    LEFT JOIN groundswell.task_owners  tgt_o ON bt.id = tgt_o.task_id
-    LEFT JOIN groundswell.identities   tgt_i ON tgt_o.identity_id = tgt_i.id
+    FROM public.tasks b
+    LEFT JOIN public.task_owners  o     ON b.id = o.task_id
+    LEFT JOIN public.identities   src_i ON o.identity_id = src_i.id
+    LEFT JOIN public.edges        e     ON e.source_task_id = b.id
+    LEFT JOIN public.tasks        bt    ON e.target_task_id = bt.id
+    LEFT JOIN public.task_owners  tgt_o ON bt.id = tgt_o.task_id
+    LEFT JOIN public.identities   tgt_i ON tgt_o.identity_id = tgt_i.id
     WHERE b.type = 'blocker' AND b.status = 'blocked' ${w}
     GROUP BY b.id, b.org_id, b.title, b.description, b.deadline, src_i.role, tgt_i.role
     ORDER BY staff_hours_lost_per_month DESC
@@ -400,13 +400,13 @@ async function getP12(orgId) {
            -- rough savings estimate: 3h/mo per blocked downstream task
            GREATEST(1, (
              SELECT COUNT(*) * 3
-             FROM groundswell.edges     e
-             JOIN groundswell.tasks     bt ON e.target_task_id = bt.id
+             FROM public.edges     e
+             JOIN public.tasks     bt ON e.target_task_id = bt.id
              WHERE e.source_task_id = t.id AND bt.status != 'completed'
            ))::integer                                              AS estimated_hours_saved_per_month,
            'High'                                                   AS estimated_roi,
            NULL::text                                               AS linked_gap
-    FROM groundswell.tasks t
+    FROM public.tasks t
     WHERE t.status IN ('pending', 'blocked') ${w}
     ORDER BY priority
     LIMIT 20
@@ -422,11 +422,11 @@ async function getP12(orgId) {
 
 // ── Edit execution ─────────────────────────────────────────────────────────
 // Executes an admin-confirmed change from POST /api/chat/confirm.
-// Only groundswell.tasks is writable — everything else is ingestion-owned.
+// Only public.tasks is writable — everything else is ingestion-owned.
 
 async function applyEdit({ org_id, table, operation, where_id, set_fields = {} }) {
-  // table arrives as e.g. "groundswell.tasks"
-  // Validate: only allow groundswell.tasks
+  // table arrives as e.g. "public.tasks"
+  // Validate: only allow public.tasks
   const parts     = table.split(".");
   const schema    = (parts[0] || "").replace(/[^a-z0-9_]/g, "");
   const tableName = (parts[1] || parts[0]).replace(/[^a-z0-9_]/g, "");

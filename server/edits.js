@@ -13,9 +13,9 @@ const { randomUUID } = require("crypto");
 const TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 // Allowlist — only SCI operational tables
-// Only groundswell.tasks is writable — all other tables are ingestion-owned
+// Only public.tasks is writable — all other tables are ingestion-owned
 const ALLOWED_TABLES = new Set([
-  "groundswell.tasks",
+  "public.tasks",
 ]);
 
 // change_id → entry
