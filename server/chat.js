@@ -51,16 +51,8 @@ const PROPOSE_EDIT_TOOL = {
       properties: {
         table: {
           type: "string",
-          enum: [
-            "sci_p8_decisions",
-            "sci_p8_action_items",
-            "sci_p8_blockers",
-            "sci_p9_stalls",
-            "sci_p10_tasks",
-            "sci_p11_gaps",
-            "sci_p12_recommendations",
-          ],
-          description: "The table that contains the record to edit.",
+          enum: ["groundswell.tasks"],
+          description: "The table that contains the record to edit. All tasks (decisions, action_items, blockers, milestones) live in groundswell.tasks.",
         },
         operation: {
           type: "string",
@@ -212,17 +204,17 @@ function appendUiTurns(existingUiHistory, userMessage, assistantText) {
 // ── Main export ────────────────────────────────────────────────────────────
 
 async function chat(message, uiHistory = [], userToken = null) {
-  if (!process.env.DATABRICKS_HOST || !process.env.DATABRICKS_TOKEN)
-    throw new Error("DATABRICKS_HOST and DATABRICKS_TOKEN required for chat");
+  if (!process.env.LLM_API_KEY)
+    throw new Error("LLM_API_KEY not set — add it to .env");
 
   const orgId = userToken || null;
 
   const client = new OpenAI({
-    apiKey:  process.env.DATABRICKS_TOKEN,
-    baseURL: `https://${process.env.DATABRICKS_HOST}/serving-endpoints`,
+    apiKey:  process.env.LLM_API_KEY,
+    baseURL: process.env.LLM_BASE_URL || "https://api.groq.com/openai/v1",
   });
 
-  const model = process.env.DATABRICKS_LLM_MODEL || "databricks-meta-llama-3-3-70b-instruct";
+  const model = process.env.LLM_MODEL || "llama-3.3-70b-versatile";
 
   // Build message array: system + history + new user message
   const messages = [

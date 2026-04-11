@@ -13,14 +13,9 @@ const { randomUUID } = require("crypto");
 const TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 // Allowlist — only SCI operational tables
+// Only groundswell.tasks is writable — all other tables are ingestion-owned
 const ALLOWED_TABLES = new Set([
-  "sci_p8_decisions",
-  "sci_p8_action_items",
-  "sci_p8_blockers",
-  "sci_p9_stalls",
-  "sci_p10_tasks",
-  "sci_p11_gaps",
-  "sci_p12_recommendations",
+  "groundswell.tasks",
 ]);
 
 // change_id → entry
@@ -32,7 +27,12 @@ function esc(v) {
   return String(v ?? "").replace(/'/g, "''");
 }
 
+function safeTable(t) {
+  return t.split(".").map(s => s.replace(/[^a-z0-9_]/g, "")).join(".");
+}
+
 function buildPreview({ table, operation, where_id, set_fields, org_id }) {
+  table = safeTable(table);
   const id  = esc(where_id);
   const org = esc(org_id);
   if (operation === "delete") {

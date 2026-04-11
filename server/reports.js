@@ -27,18 +27,24 @@ function getPool() { return db.getPool(); }
 
 async function ensureTable() {
   const pool = getPool();
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS static_reporting (
-      id                 TEXT   PRIMARY KEY,
-      org_id             TEXT   NOT NULL,
-      contents           TEXT   NOT NULL,
-      timestamp_created  BIGINT NOT NULL,
-      simple_overview    TEXT   NOT NULL
-    )
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_static_reporting_org_id ON static_reporting(org_id)
-  `);
+  // Table likely already exists and is owned by the ingestion team's role.
+  // We only need INSERT permission — skip DDL silently if it fails.
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS static_reporting (
+        id                 TEXT   PRIMARY KEY,
+        org_id             TEXT   NOT NULL,
+        contents           TEXT   NOT NULL,
+        timestamp_created  BIGINT NOT NULL,
+        simple_overview    TEXT   NOT NULL
+      )
+    `);
+  } catch { /* table already exists under another owner — that's fine */ }
+  try {
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_static_reporting_org_id ON static_reporting(org_id)
+    `);
+  } catch { /* index already exists or no ownership — non-fatal */ }
 }
 
 // ── Markdown formatters (one per panel) ───────────────────────────────────
@@ -150,7 +156,7 @@ async function writeOrgReports(orgId) {
   ];
 
   const pool = getPool();
-  const now  = Math.floor(Date.now() / 1000);
+  const now  = new Date().toISOString(); // actual column is timestamptz
 
   for (const r of reports) {
     await pool.query(
