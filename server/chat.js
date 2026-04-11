@@ -1,16 +1,20 @@
 /*
-  chat.js — Agentic chat loop
+  chat.js — Agentic chat loop (Databricks Foundation Model API)
+
+  Uses the OpenAI-compatible Databricks endpoint so no new credentials needed —
+  reuses DATABRICKS_HOST and DATABRICKS_TOKEN already in .env.
+
+  Model: set DATABRICKS_LLM_MODEL in .env (default: databricks-meta-llama-3-3-70b-instruct)
 
   External contract (what Uvicorn/UI sends and receives):
     Request:  { user_token, message, history: [{sender, message, timestamp}] }
     Response: { response, history: [{sender, message, timestamp}] }
 
-  Internally converts to/from Claude's {role, content} format.
-  Tool calls, tool results, and intermediate turns are stripped before
-  returning — UI only ever sees clean human-readable turns.
+  Internally uses OpenAI message format. Tool calls, tool results, and
+  intermediate turns are stripped before returning — UI only sees clean turns.
 */
 
-const Anthropic = require("@anthropic-ai/sdk");
+const { OpenAI } = require("openai");
 const db = require("./db");
 
 const SYSTEM_PROMPT = `You are an operations intelligence assistant for a B2B company.
@@ -25,61 +29,73 @@ Use the tools to fetch current data before answering. Be concise and specific.
 When referencing data always include IDs, owners, severity, or team names — not vague summaries.
 If something is stalled or overdue say so directly.`;
 
+// OpenAI tool format (different from Anthropic — parameters not input_schema)
 const TOOLS = [
   {
-    name: "get_conversation_state",
-    description: "Get decisions, action items, and active blockers (P8).",
-    input_schema: {
-      type: "object",
-      properties: {
-        filter_status: { type: "string", enum: ["all", "open", "closed", "active"] },
+    type: "function",
+    function: {
+      name: "get_conversation_state",
+      description: "Get decisions, action items, and active blockers (P8).",
+      parameters: {
+        type: "object",
+        properties: {
+          filter_status: { type: "string", enum: ["all", "open", "closed", "active"] },
+        },
       },
-      required: [],
     },
   },
   {
-    name: "get_stalls",
-    description: "Get current stalls blocking downstream teams (P9).",
-    input_schema: {
-      type: "object",
-      properties: {
-        severity: { type: "string", enum: ["all", "high", "medium", "low"] },
+    type: "function",
+    function: {
+      name: "get_stalls",
+      description: "Get current stalls blocking downstream teams (P9).",
+      parameters: {
+        type: "object",
+        properties: {
+          severity: { type: "string", enum: ["all", "high", "medium", "low"] },
+        },
       },
-      required: [],
     },
   },
   {
-    name: "get_workflow_map",
-    description: "Get task classifications across workflows (P10).",
-    input_schema: {
-      type: "object",
-      properties: {
-        classification: { type: "string", enum: ["all", "ASSEMBLY", "ASSEMBLY_JUDGMENT", "JUDGMENT"] },
-        workflow: { type: "string" },
+    type: "function",
+    function: {
+      name: "get_workflow_map",
+      description: "Get task classifications across workflows (P10).",
+      parameters: {
+        type: "object",
+        properties: {
+          classification: { type: "string", enum: ["all", "ASSEMBLY", "ASSEMBLY_JUDGMENT", "JUDGMENT"] },
+          workflow: { type: "string" },
+        },
       },
-      required: [],
     },
   },
   {
-    name: "get_integration_gaps",
-    description: "Get integration gaps and their cost in hours lost per month (P11).",
-    input_schema: { type: "object", properties: {}, required: [] },
+    type: "function",
+    function: {
+      name: "get_integration_gaps",
+      description: "Get integration gaps and their cost in hours lost per month (P11).",
+      parameters: { type: "object", properties: {} },
+    },
   },
   {
-    name: "get_roadmap",
-    description: "Get the prioritised automation roadmap (P12).",
-    input_schema: {
-      type: "object",
-      properties: {
-        type: { type: "string", enum: ["all", "automate", "integrate", "preserve"] },
+    type: "function",
+    function: {
+      name: "get_roadmap",
+      description: "Get the prioritised automation roadmap (P12).",
+      parameters: {
+        type: "object",
+        properties: {
+          type: { type: "string", enum: ["all", "automate", "integrate", "preserve"] },
+        },
       },
-      required: [],
     },
   },
 ];
 
-// orgId scopes every tool call to that org's rows only
-// input contains the filter params Claude chose (e.g. severity: "high")
+// ── Tool execution ─────────────────────────────────────────────────────────
+
 async function executeTool(name, orgId, input = {}) {
   switch (name) {
     case "get_conversation_state": {
@@ -118,77 +134,79 @@ async function executeTool(name, orgId, input = {}) {
 
 // ── History converters ─────────────────────────────────────────────────────
 
-// UI {sender, message, timestamp} → Claude {role, content}
-// Strip any tool turns that may have leaked in — Claude history is internal only
-function uiToClaudeHistory(uiHistory) {
+// UI {sender, message, timestamp} → OpenAI {role, content}
+function uiToOpenAIHistory(uiHistory) {
   return uiHistory.map(m => ({
     role: m.sender === "user" ? "user" : "assistant",
     content: m.message,
   }));
 }
 
-// Append the new user + assistant turn to the UI history and return
 function appendUiTurns(existingUiHistory, userMessage, assistantText) {
   const now = new Date().toISOString();
   return [
     ...existingUiHistory,
-    { sender: "user",      message: userMessage,    timestamp: now },
-    { sender: "assistant", message: assistantText,  timestamp: now },
+    { sender: "user",      message: userMessage,   timestamp: now },
+    { sender: "assistant", message: assistantText, timestamp: now },
   ];
 }
 
 // ── Main export ────────────────────────────────────────────────────────────
 
-// user_token carries org_id — all tool calls are scoped to that org's data only
-// Resolution: for now user_token IS the org_id directly.
-// When auth is added Saturday, swap this for a token→org_id lookup.
 async function chat(message, uiHistory = [], userToken = null) {
-  if (!process.env.ANTHROPIC_API_KEY)
-    throw new Error("ANTHROPIC_API_KEY not set in .env — required for chat");
-  const orgId = userToken || null; // userToken = org_id until auth layer is added
-  const anthropic = new Anthropic.default({ apiKey: process.env.ANTHROPIC_API_KEY });
+  if (!process.env.DATABRICKS_HOST || !process.env.DATABRICKS_TOKEN)
+    throw new Error("DATABRICKS_HOST and DATABRICKS_TOKEN required for chat");
 
-  // Convert UI history to Claude format, append new user message
+  const orgId = userToken || null;
+
+  const client = new OpenAI({
+    apiKey:  process.env.DATABRICKS_TOKEN,
+    baseURL: `https://${process.env.DATABRICKS_HOST}/serving-endpoints`,
+  });
+
+  const model = process.env.DATABRICKS_LLM_MODEL || "databricks-meta-llama-3-3-70b-instruct";
+
+  // Build message array: system + history + new user message
   const messages = [
-    ...uiToClaudeHistory(uiHistory),
+    { role: "system", content: SYSTEM_PROMPT },
+    ...uiToOpenAIHistory(uiHistory),
     { role: "user", content: message },
   ];
 
   let finalText = "";
 
-  // Agentic loop — keep going until Claude stops calling tools
+  // Agentic loop — OpenAI finish_reason format
   while (true) {
-    const response = await anthropic.messages.create({
-      model: "claude-opus-4-5",
-      max_tokens: 1024,
-      system: SYSTEM_PROMPT,
+    const response = await client.chat.completions.create({
+      model,
       tools: TOOLS,
+      tool_choice: "auto",
       messages,
     });
 
-    messages.push({ role: "assistant", content: response.content });
+    const choice = response.choices[0];
+    messages.push(choice.message); // add assistant turn to history
 
-    if (response.stop_reason === "end_turn") {
-      finalText = response.content.find(b => b.type === "text")?.text ?? "";
+    if (choice.finish_reason === "stop") {
+      finalText = choice.message.content ?? "";
       break;
     }
 
-    if (response.stop_reason === "tool_use") {
+    if (choice.finish_reason === "tool_calls") {
       const toolResults = [];
-      for (const block of response.content) {
-        if (block.type !== "tool_use") continue;
-        const result = await executeTool(block.name, orgId, block.input ?? {});
+      for (const toolCall of (choice.message.tool_calls || [])) {
+        const input = JSON.parse(toolCall.function.arguments || "{}");
+        const result = await executeTool(toolCall.function.name, orgId, input);
         toolResults.push({
-          type: "tool_result",
-          tool_use_id: block.id,
-          content: JSON.stringify(result),
+          role:         "tool",
+          tool_call_id: toolCall.id,
+          content:      JSON.stringify(result),
         });
       }
-      messages.push({ role: "user", content: toolResults });
+      messages.push(...toolResults);
     }
   }
 
-  // Return clean UI-format history — no tool internals exposed
   const updatedHistory = appendUiTurns(uiHistory, message, finalText);
   return { response: finalText, history: updatedHistory };
 }
