@@ -27,6 +27,12 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Request logger — shows every inbound call and LLM calls are logged in chat.js
+app.use((req, _res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+  next();
+});
+
 // All data routes accept ?org_id=... query param to scope to one org
 // In mock mode org_id is ignored — single-org mock data returned regardless
 app.get("/api/p8",       async (req, res) => res.json(await getP8(req.query.org_id)));

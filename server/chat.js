@@ -227,8 +227,12 @@ async function chat(message, uiHistory = [], userToken = null) {
   // Accumulates any propose_db_edit calls made during this turn
   const proposedChanges = [];
 
+  let loopCount = 0;
+
   // Agentic loop — OpenAI finish_reason format
   while (true) {
+    loopCount++;
+    console.log(`[${new Date().toISOString()}] LLM call #${loopCount} — messages: ${messages.length}, org: ${orgId}`);
     const response = await client.chat.completions.create({
       model,
       tools: TOOLS,
@@ -237,7 +241,8 @@ async function chat(message, uiHistory = [], userToken = null) {
     });
 
     const choice = response.choices[0];
-    messages.push(choice.message); // add assistant turn to history
+    console.log(`[${new Date().toISOString()}] LLM call #${loopCount} done — finish_reason: ${choice.finish_reason}${choice.message.tool_calls ? `, tools: ${choice.message.tool_calls.map(t => t.function.name).join(", ")}` : ""}`);
+    messages.push(choice.message);
 
     if (choice.finish_reason === "stop") {
       finalText = choice.message.content ?? "";
