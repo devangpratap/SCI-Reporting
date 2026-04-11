@@ -18,23 +18,17 @@ const { OpenAI } = require("openai");
 const db = require("./db");
 const { storePending } = require("./edits");
 
-const SYSTEM_PROMPT = `You are an operations intelligence assistant for a B2B company.
-You also act as a database editor — when an admin describes a real-world change
-(e.g. "I spoke to the team, gap X is resolved" or "action item Y is done"), call
-propose_db_edit to queue the change for confirmation. Never edit the database
-directly — always use propose_db_edit so the admin can approve first.
-When proposing edits, tell the admin exactly what will change and ask them to confirm.
+const SYSTEM_PROMPT = `You are an operations intelligence assistant for a B2B organisation.
+You have access to six live data tools that together cover the full operational picture:
+- Conversation state: decisions that have been made, action items in flight, and active blockers
+- Stalls: tasks that have stopped moving entirely, ranked by urgency and deadline risk
+- Workflow map: every task classified by automation potential (ASSEMBLY / ASSEMBLY_JUDGMENT / JUDGMENT)
+- Integration gaps: every place where data is failing to flow between systems and the quantified cost in hours lost, errors introduced, and delays incurred
+- Automation roadmap: prioritised recommendations on what to automate, what integrations to fix, and what to preserve as human work
 
-You have access to live data across 5 operational verticals:
-- P8: Conversation state — decisions made, action items, blockers
-- P9: Stalls — tasks that have stopped moving and why
-- P10: Workflow map — tasks classified by automation potential (ASSEMBLY / ASSEMBLY_JUDGMENT / JUDGMENT)
-- P11: Integration gaps — where data isn't flowing between systems and the cost in hours
-- P12: Automation roadmap — prioritised recommendations on what to fix or automate
+Always fetch live data before answering. Be specific — include IDs, owners, deadlines, team names, and severity when referencing any item. Never give vague summaries. If something is overdue or stalled, say so directly.
 
-Use the tools to fetch current data before answering. Be concise and specific.
-When referencing data always include IDs, owners, severity, or team names — not vague summaries.
-If something is stalled or overdue say so directly.`;
+You also act as a database editor. When an admin describes a real-world change — a gap has been resolved, an action item is complete, a blocker has been cleared — use propose_db_edit to queue the change for admin confirmation. Never apply edits directly. Always tell the admin exactly what will change before asking them to confirm.`;
 
 // ── propose_db_edit tool definition ───────────────────────────────────────
 const PROPOSE_EDIT_TOOL = {
@@ -84,7 +78,11 @@ const TOOLS = [
     type: "function",
     function: {
       name: "get_conversation_state",
-      description: "Get decisions, action items, and active blockers (P8).",
+      description:
+        "Returns a structured live snapshot of the organisation's current operational state — refreshed every reporting cycle. " +
+        "Contains three categories: decisions (choices formally made, with participants, rationale, and status), action items (tasks assigned to owners with deadlines and blocking relationships), and blockers (issues actively preventing downstream progress). " +
+        "Supports filtering by status (open, closed, active). " +
+        "Use this to answer questions about what has been decided, what work is currently in flight, who owns what, what is overdue, or what is actively blocked — across any team or function within the organisation.",
       parameters: {
         type: "object",
         properties: {
@@ -97,7 +95,12 @@ const TOOLS = [
     type: "function",
     function: {
       name: "get_stalls",
-      description: "Get current stalls blocking downstream teams (P9).",
+      description:
+        "Returns all tasks that have stopped moving — tasks with a blocked status — ranked by severity based on deadline proximity. " +
+        "High severity means the deadline has already passed; medium means a deadline is approaching; low means no deadline is set. " +
+        "Each stall includes affected teams, context, and how long the task has been unresponsive. " +
+        "This is distinct from integration gaps (structural data-flow failures) and from blockers in conversation state (task-level flags) — stalls are specifically tasks that were in progress and have now seized up, creating downstream risk. " +
+        "Supports filtering by severity. Use this to identify where operations have stalled and which items carry the most urgency, regardless of industry.",
       parameters: {
         type: "object",
         properties: {
@@ -110,7 +113,11 @@ const TOOLS = [
     type: "function",
     function: {
       name: "get_workflow_map",
-      description: "Get task classifications across workflows (P10).",
+      description:
+        "Returns every task in the organisation classified by its automation potential — refreshed every reporting cycle. " +
+        "Each task is labelled as ASSEMBLY (fully automatable — routine, repeatable, rule-based work a machine can handle end-to-end), ASSEMBLY_JUDGMENT (AI-assisted — structured work that benefits from automation but requires human review at key decision points), or JUDGMENT (human-essential — strategic, ambiguous, or relationship-dependent work that must not be automated). " +
+        "Classifications are derived from task type and status. Results can be filtered by classification tier or by workflow group, making it possible to scope analysis to a specific process or function. " +
+        "Use this to understand the composition of work across the organisation, identify where automation would have the highest impact, and surface where human expertise is genuinely irreplaceable — applicable to any industry.",
       parameters: {
         type: "object",
         properties: {
@@ -157,7 +164,7 @@ const TOOLS = [
 async function executeTool(name, orgId, input = {}) {
   switch (name) {
     case "get_conversation_state": {
-      const data = await db.getP8(orgId);
+      const data = await db.getState(orgId);
       const s = input.filter_status;
       if (!s || s === "all") return data;
       return {
@@ -167,12 +174,12 @@ async function executeTool(name, orgId, input = {}) {
       };
     }
     case "get_stalls": {
-      const data = await db.getP9(orgId);
+      const data = await db.getStalls(orgId);
       if (!input.severity || input.severity === "all") return data;
       return { stalls: data.stalls.filter(s => s.severity === input.severity) };
     }
     case "get_workflow_map": {
-      const data = await db.getP10(orgId);
+      const data = await db.getWorkflows(orgId);
       let tasks = data.tasks;
       if (input.classification && input.classification !== "all")
         tasks = tasks.filter(t => t.classification === input.classification);
@@ -180,9 +187,9 @@ async function executeTool(name, orgId, input = {}) {
         tasks = tasks.filter(t => t.workflow === input.workflow);
       return { tasks };
     }
-    case "get_integration_gaps": return db.getP11(orgId);
+    case "get_integration_gaps": return db.getGaps(orgId);
     case "get_roadmap": {
-      const data = await db.getP12(orgId);
+      const data = await db.getRoadmap(orgId);
       if (!input.type || input.type === "all") return data;
       return { recommendations: data.recommendations.filter(r => r.type === input.type) };
     }
