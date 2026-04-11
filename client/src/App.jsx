@@ -15,13 +15,15 @@
   add a nav button + tab entry here. Nothing else changes.
 */
 
-import { useState } from "react";
+import { useState, lazy, Suspense } from "react";
 import P8Panel from "./panels/P8Panel";
 import P9Panel from "./panels/P9Panel";
 import P10Panel from "./panels/P10Panel";
 import P11Panel from "./panels/P11Panel";
 import P12Panel from "./panels/P12Panel";
-import ChatPanel from "./components/ChatPanel";
+
+// Lazy-loaded — zero bundle cost until the FAB is first clicked
+const ChatPanel = lazy(() => import("./components/ChatPanel"));
 
 const TABS = [
   { id: "p8",  label: "P8 · Conversation State" },
@@ -58,8 +60,10 @@ export default function App() {
 
       <Panel />
 
-      {/* Floating AI chat — bidirectional, talks directly to /api/chat */}
-      <ChatPanel />
+      {/* Lazy-loaded — only pulls the bundle when first rendered */}
+      <Suspense fallback={null}>
+        <ChatPanel />
+      </Suspense>
     </div>
   );
 }

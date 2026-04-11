@@ -1,13 +1,13 @@
 /*
   chat.js — Agentic chat loop
 
-  Accepts a user message + conversation history.
-  Calls Claude with tool use — Claude decides which data to fetch,
-  server executes the tool against db.js, loop continues until
-  Claude produces a final text response.
+  External contract (what Uvicorn/UI sends and receives):
+    Request:  { user_token, message, history: [{sender, message, timestamp}] }
+    Response: { response, history: [{sender, message, timestamp}] }
 
-  Tools mirror the MCP tools exactly so behaviour is consistent
-  whether the query comes from Claude Desktop or the UI chat.
+  Internally converts to/from Claude's {role, content} format.
+  Tool calls, tool results, and intermediate turns are stripped before
+  returning — UI only ever sees clean human-readable turns.
 */
 
 const Anthropic = require("@anthropic-ai/sdk");
@@ -28,74 +28,57 @@ If something is stalled or overdue say so directly.`;
 const TOOLS = [
   {
     name: "get_conversation_state",
-    description: "Get decisions, action items, and active blockers (P8). Use for questions about what was decided, who owns what, what is blocking progress.",
+    description: "Get decisions, action items, and active blockers (P8).",
     input_schema: {
       type: "object",
       properties: {
-        filter_status: {
-          type: "string",
-          enum: ["all", "open", "closed", "active"],
-          description: "Filter items by status. Default: all",
-        },
+        filter_status: { type: "string", enum: ["all", "open", "closed", "active"] },
       },
       required: [],
     },
   },
   {
     name: "get_stalls",
-    description: "Get current stalls — tasks that are stuck and blocking downstream teams (P9). Use for questions about what is blocked, critical path issues, unresponsive owners.",
+    description: "Get current stalls blocking downstream teams (P9).",
     input_schema: {
       type: "object",
       properties: {
-        severity: {
-          type: "string",
-          enum: ["all", "high", "medium", "low"],
-          description: "Filter by severity. Default: all",
-        },
+        severity: { type: "string", enum: ["all", "high", "medium", "low"] },
       },
       required: [],
     },
   },
   {
     name: "get_workflow_map",
-    description: "Get task classifications across workflows (P10). Use for questions about what can be automated, which tasks need human judgment, automation coverage.",
+    description: "Get task classifications across workflows (P10).",
     input_schema: {
       type: "object",
       properties: {
-        classification: {
-          type: "string",
-          enum: ["all", "ASSEMBLY", "ASSEMBLY_JUDGMENT", "JUDGMENT"],
-        },
-        workflow: {
-          type: "string",
-          description: "Filter by workflow name e.g. 'Invoice Reconciliation'",
-        },
+        classification: { type: "string", enum: ["all", "ASSEMBLY", "ASSEMBLY_JUDGMENT", "JUDGMENT"] },
+        workflow: { type: "string" },
       },
       required: [],
     },
   },
   {
     name: "get_integration_gaps",
-    description: "Get integration gaps between systems and their quantified cost in hours lost per month (P11). Use for questions about missing data flows, error rates, manual work caused by broken integrations.",
+    description: "Get integration gaps and their cost in hours lost per month (P11).",
     input_schema: { type: "object", properties: {}, required: [] },
   },
   {
     name: "get_roadmap",
-    description: "Get the prioritised automation roadmap (P12). Use for questions about what to fix first, ROI, what should stay human-handled.",
+    description: "Get the prioritised automation roadmap (P12).",
     input_schema: {
       type: "object",
       properties: {
-        type: {
-          type: "string",
-          enum: ["all", "automate", "integrate", "preserve"],
-        },
+        type: { type: "string", enum: ["all", "automate", "integrate", "preserve"] },
       },
       required: [],
     },
   },
 ];
 
-async function executeTool(name, input) {
+async function executeTool(name) {
   switch (name) {
     case "get_conversation_state": return db.getP8();
     case "get_stalls":             return db.getP9();
@@ -106,14 +89,40 @@ async function executeTool(name, input) {
   }
 }
 
-async function chat(message, history = []) {
+// ── History converters ─────────────────────────────────────────────────────
+
+// UI {sender, message, timestamp} → Claude {role, content}
+// Strip any tool turns that may have leaked in — Claude history is internal only
+function uiToClaudeHistory(uiHistory) {
+  return uiHistory.map(m => ({
+    role: m.sender === "user" ? "user" : "assistant",
+    content: m.message,
+  }));
+}
+
+// Append the new user + assistant turn to the UI history and return
+function appendUiTurns(existingUiHistory, userMessage, assistantText) {
+  const now = new Date().toISOString();
+  return [
+    ...existingUiHistory,
+    { sender: "user",      message: userMessage,    timestamp: now },
+    { sender: "assistant", message: assistantText,  timestamp: now },
+  ];
+}
+
+// ── Main export ────────────────────────────────────────────────────────────
+
+// user_token: forwarded for future auth — not used internally yet
+async function chat(message, uiHistory = [], userToken = null) {
   const anthropic = new Anthropic.default({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-  // Build message array from history + new user message
+  // Convert UI history to Claude format, append new user message
   const messages = [
-    ...history,
+    ...uiToClaudeHistory(uiHistory),
     { role: "user", content: message },
   ];
+
+  let finalText = "";
 
   // Agentic loop — keep going until Claude stops calling tools
   while (true) {
@@ -125,30 +134,31 @@ async function chat(message, history = []) {
       messages,
     });
 
-    // Add assistant turn to history
     messages.push({ role: "assistant", content: response.content });
 
     if (response.stop_reason === "end_turn") {
-      const text = response.content.find(b => b.type === "text")?.text ?? "";
-      // Return response + updated history (so UI can send it back next turn)
-      return { response: text, history: messages };
+      finalText = response.content.find(b => b.type === "text")?.text ?? "";
+      break;
     }
 
     if (response.stop_reason === "tool_use") {
       const toolResults = [];
       for (const block of response.content) {
         if (block.type !== "tool_use") continue;
-        const result = await executeTool(block.name, block.input);
+        const result = await executeTool(block.name);
         toolResults.push({
           type: "tool_result",
           tool_use_id: block.id,
           content: JSON.stringify(result),
         });
       }
-      // Feed results back as a user turn
       messages.push({ role: "user", content: toolResults });
     }
   }
+
+  // Return clean UI-format history — no tool internals exposed
+  const updatedHistory = appendUiTurns(uiHistory, message, finalText);
+  return { response: finalText, history: updatedHistory };
 }
 
 module.exports = { chat };
