@@ -49,8 +49,8 @@ async function ensureTable() {
 
 // ── Markdown formatters (one per panel) ───────────────────────────────────
 
-function fmtP8({ decisions, action_items, blockers }) {
-  const lines = ["# P8 — Conversation State\n"];
+function fmtState({ decisions, action_items, blockers }) {
+  const lines = ["# Operations State\n"];
 
   lines.push("## Decisions");
   decisions.forEach(d =>
@@ -72,8 +72,8 @@ function fmtP8({ decisions, action_items, blockers }) {
   return lines.join("\n");
 }
 
-function fmtP9({ stalls }) {
-  const lines = ["# P9 — Critical-Path Stalls\n"];
+function fmtStalls({ stalls }) {
+  const lines = ["# Critical-Path Stalls\n"];
   if (!stalls.length) { lines.push("No active stalls."); return lines.join("\n"); }
   stalls.forEach(s =>
     lines.push(`## [${s.severity.toUpperCase()}] ${s.description}\n- Type: ${s.stall_type}\n- Stale since: ${new Date(s.unresponsive_since).toLocaleDateString()}\n- Affects: ${s.affected_teams?.join(", ")}`)
@@ -84,7 +84,7 @@ function fmtP9({ stalls }) {
 function fmtGraph({ nodes, edges }) {
   const critical  = nodes.filter(n => n.on_critical_path);
   const stalled   = nodes.filter(n => n.is_stalled);
-  const lines     = ["# P9 — Dependency Graph\n"];
+  const lines     = ["# Dependency Graph\n"];
 
   lines.push(`**${nodes.length} nodes · ${edges.length} edges · ${critical.length} on critical path · ${stalled.length} stalled**\n`);
 
@@ -114,8 +114,8 @@ function fmtGraph({ nodes, edges }) {
   return lines.join("\n");
 }
 
-function fmtP10({ tasks }) {
-  const lines = ["# P10 — Workflow Map\n"];
+function fmtWorkflows({ tasks }) {
+  const lines = ["# Workflow Map\n"];
   const byWorkflow = tasks.reduce((acc, t) => {
     (acc[t.workflow] = acc[t.workflow] || []).push(t);
     return acc;
@@ -129,9 +129,9 @@ function fmtP10({ tasks }) {
   return lines.join("\n");
 }
 
-function fmtP11({ gaps, simulation }) {
+function fmtGaps({ gaps, simulation }) {
   const total = gaps.reduce((s, g) => s + g.staff_hours_lost_per_month, 0);
-  const lines = [`# P11 — Integration Gaps\n`, `**Total hours lost/month: ${total}h**\n`];
+  const lines = [`# Integration Gaps\n`, `**Total hours lost/month: ${total}h**\n`];
   gaps.forEach(g =>
     lines.push(`## ${g.source_system} → ${g.target_system}\n- Missing: ${g.missing_data}\n- Downstream task: ${g.downstream_task}\n- Cost: ${g.staff_hours_lost_per_month}h/mo · Error rate: ${Math.round(g.error_rate * 100)}% · Avg delay: ${g.avg_delay_days}d`)
   );
@@ -140,8 +140,8 @@ function fmtP11({ gaps, simulation }) {
   return lines.join("\n");
 }
 
-function fmtP12({ recommendations }) {
-  const lines = ["# P12 — Automation Roadmap\n"];
+function fmtRoadmap({ recommendations }) {
+  const lines = ["# Automation Roadmap\n"];
   recommendations.forEach(r => {
     const savings = r.estimated_hours_saved_per_month > 0
       ? ` · Saves ${r.estimated_hours_saved_per_month}h/mo` : "";
@@ -152,11 +152,11 @@ function fmtP12({ recommendations }) {
 
 // ── One-line overview generators ──────────────────────────────────────────
 
-function overviewP8({ decisions, action_items, blockers }) {
+function overviewState({ decisions, action_items, blockers }) {
   const overdue = action_items.filter(a => a.status === "open" && new Date(a.deadline) < Date.now()).length;
   return `${decisions.length} decisions · ${action_items.filter(a => a.status === "open").length} open items${overdue ? ` · ${overdue} overdue` : ""} · ${blockers.filter(b => b.status === "active").length} active blockers`;
 }
-function overviewP9({ stalls }) {
+function overviewStalls({ stalls }) {
   const high = stalls.filter(s => s.severity === "high").length;
   return `${stalls.length} stalls${high ? ` (${high} high severity)` : ""} · teams: ${[...new Set(stalls.flatMap(s => s.affected_teams ?? []))].join(", ") || "none"}`;
 }
@@ -165,15 +165,15 @@ function overviewGraph({ nodes, edges }) {
   const stalled  = nodes.filter(n => n.is_stalled).length;
   return `${nodes.length} nodes · ${edges.length} edges · ${critical} on critical path · ${stalled} stalled`;
 }
-function overviewP10({ tasks }) {
+function overviewWorkflows({ tasks }) {
   const auto = tasks.filter(t => t.classification === "ASSEMBLY").length;
   return `${tasks.length} tasks · ${Math.round((auto / tasks.length) * 100)}% fully automatable · ${tasks.filter(t => t.classification === "JUDGMENT").length} require human judgment`;
 }
-function overviewP11({ gaps, simulation }) {
+function overviewGaps({ gaps, simulation }) {
   const total = gaps.reduce((s, g) => s + g.staff_hours_lost_per_month, 0);
   return `${gaps.length} integration gaps · ${total}h lost/month · ${(simulation.projected_throughput / simulation.current_throughput).toFixed(1)}× throughput potential`;
 }
-function overviewP12({ recommendations }) {
+function overviewRoadmap({ recommendations }) {
   const totalSaved = recommendations.reduce((s, r) => s + r.estimated_hours_saved_per_month, 0);
   return `${recommendations.length} recommendations · ${totalSaved}h/month savings potential · top: ${recommendations[0]?.title ?? "none"}`;
 }
@@ -181,18 +181,18 @@ function overviewP12({ recommendations }) {
 // ── Write all reports for one org ─────────────────────────────────────────
 
 async function writeOrgReports(orgId) {
-  const [p8, p9, graph, p10, p11, p12] = await Promise.all([
-    db.getP8(orgId), db.getP9(orgId), db.getGraph(orgId),
-    db.getP10(orgId), db.getP11(orgId), db.getP12(orgId),
+  const [state, stalls, graph, workflows, gaps, roadmap] = await Promise.all([
+    db.getState(orgId), db.getStalls(orgId), db.getGraph(orgId),
+    db.getWorkflows(orgId), db.getGaps(orgId), db.getRoadmap(orgId),
   ]);
 
   const reports = [
-    { contents: fmtP8(p8),       simple_overview: overviewP8(p8)       },
-    { contents: fmtP9(p9),       simple_overview: overviewP9(p9)       },
-    { contents: fmtGraph(graph), simple_overview: overviewGraph(graph)  },
-    { contents: fmtP10(p10),     simple_overview: overviewP10(p10)     },
-    { contents: fmtP11(p11),     simple_overview: overviewP11(p11)     },
-    { contents: fmtP12(p12),     simple_overview: overviewP12(p12)     },
+    { contents: fmtState(state),         simple_overview: overviewState(state)       },
+    { contents: fmtStalls(stalls),       simple_overview: overviewStalls(stalls)     },
+    { contents: fmtGraph(graph),         simple_overview: overviewGraph(graph)       },
+    { contents: fmtWorkflows(workflows), simple_overview: overviewWorkflows(workflows) },
+    { contents: fmtGaps(gaps),           simple_overview: overviewGaps(gaps)         },
+    { contents: fmtRoadmap(roadmap),     simple_overview: overviewRoadmap(roadmap)   },
   ];
 
   const pool = getPool();

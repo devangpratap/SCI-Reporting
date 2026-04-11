@@ -5,12 +5,12 @@
   To switch to Databricks: set DATA_SOURCE=databricks in .env — nothing else changes.
 
   Endpoints:
-    GET  /api/p8        — decisions, action items, blockers
-    GET  /api/p9        — stall alerts
-    GET  /api/p9/graph  — dependency graph nodes + edges (static, loaded once)
-    GET  /api/p10       — task classifications
-    GET  /api/p11       — integration gaps + simulation
-    GET  /api/p12       — automation roadmap
+    GET  /api/state     — decisions, action items, blockers
+    GET  /api/stalls    — stall alerts
+    GET  /api/graph     — dependency graph nodes + edges
+    GET  /api/workflows — task classifications
+    GET  /api/gaps      — integration gaps + simulation
+    GET  /api/roadmap   — automation roadmap
     POST /api/chat         — bidirectional AI chat; response includes proposed_changes[] when AI detects a DB edit intent
     POST /api/chat/confirm — confirm or reject a pending DB change ({ change_id, approved, user_token })
 */
@@ -18,7 +18,7 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-const { getP8, getP9, getGraph, getP10, getP11, getP12, applyEdit } = require("./db");
+const { getState, getStalls, getGraph, getWorkflows, getGaps, getRoadmap, applyEdit } = require("./db");
 const { chat, chatStream } = require("./chat");
 const { getPending, removePending } = require("./edits");
 const { refreshReports, startAutoRefresh } = require("./reports");
@@ -35,12 +35,12 @@ app.use((req, _res, next) => {
 
 // All data routes accept ?org_id=... query param to scope to one org
 // In mock mode org_id is ignored — single-org mock data returned regardless
-app.get("/api/p8",       async (req, res) => res.json(await getP8(req.query.org_id)));
-app.get("/api/p9",       async (req, res) => res.json(await getP9(req.query.org_id)));
-app.get("/api/p9/graph", async (req, res) => res.json(await getGraph(req.query.org_id)));
-app.get("/api/p10",      async (req, res) => res.json(await getP10(req.query.org_id)));
-app.get("/api/p11",      async (req, res) => res.json(await getP11(req.query.org_id)));
-app.get("/api/p12",      async (req, res) => res.json(await getP12(req.query.org_id)));
+app.get("/api/state",     async (req, res) => res.json(await getState(req.query.org_id)));
+app.get("/api/stalls",    async (req, res) => res.json(await getStalls(req.query.org_id)));
+app.get("/api/graph",     async (req, res) => res.json(await getGraph(req.query.org_id)));
+app.get("/api/workflows", async (req, res) => res.json(await getWorkflows(req.query.org_id)));
+app.get("/api/gaps",      async (req, res) => res.json(await getGaps(req.query.org_id)));
+app.get("/api/roadmap",   async (req, res) => res.json(await getRoadmap(req.query.org_id)));
 
 // Bidirectional AI chat — full response (non-streaming)
 // Body:    { user_token, message, history: [{sender, message, timestamp}] }

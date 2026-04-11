@@ -58,7 +58,7 @@ async function getOrgIds() {
 // ── P8 — Conversation State ────────────────────────────────────────────────
 // decisions / action_items / blockers from public.tasks
 
-async function getP8(orgId) {
+async function getState(orgId) {
   if (!USE_POSTGRES) return readMock("p8_conversations.json");
 
   const w = orgId ? "AND t.org_id = $1" : "";
@@ -127,7 +127,7 @@ async function getP8(orgId) {
 // ── P9 — Critical-Path Stalls ──────────────────────────────────────────────
 // Stalls = tasks with status='blocked'; graph = all tasks + edges
 
-async function getP9(orgId) {
+async function getStalls(orgId) {
   if (!USE_POSTGRES) {
     const data = readMock("p9_stalls.json");
     return { stalls: data.stalls };
@@ -257,7 +257,7 @@ async function getGraph(orgId) {
 // ── P10 — Workflow Map ─────────────────────────────────────────────────────
 // Classification derived from task type (no explicit column in schema)
 
-async function getP10(orgId) {
+async function getWorkflows(orgId) {
   if (!USE_POSTGRES) return readMock("p10_workflows.json");
 
   const w = orgId ? "AND t.org_id = $1" : "";
@@ -310,7 +310,7 @@ async function getP10(orgId) {
 // ── P11 — Integration Gaps ─────────────────────────────────────────────────
 // Derived from blocked tasks — each blocker = a gap blocking downstream work
 
-async function getP11(orgId) {
+async function getGaps(orgId) {
   if (!USE_POSTGRES) return readMock("p11_gaps.json");
 
   const w = orgId ? "AND b.org_id = $1" : "";
@@ -364,10 +364,10 @@ async function getP11(orgId) {
 // ── P12 — Automation Roadmap ───────────────────────────────────────────────
 // Pending / blocked tasks ranked into a prioritised recommendation list
 
-async function getP12(orgId) {
+async function getRoadmap(orgId) {
   if (!USE_POSTGRES) {
     const data = readMock("p12_roadmap.json");
-    const gaps = readMock("p11_gaps.json").gaps;
+    const gaps = readMock("gaps.json").gaps;
     const gapMap = Object.fromEntries(gaps.map(g => [g.id, g.missing_data]));
     return {
       recommendations: data.recommendations.map(r => ({
@@ -455,4 +455,4 @@ async function applyEdit({ org_id, table, operation, where_id, set_fields = {} }
   return { success: true };
 }
 
-module.exports = { getP8, getP9, getGraph, getP10, getP11, getP12, getOrgIds, applyEdit, getPool };
+module.exports = { getState, getStalls, getGraph, getWorkflows, getGaps, getRoadmap, getOrgIds, applyEdit, getPool };
