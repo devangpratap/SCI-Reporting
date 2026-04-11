@@ -293,4 +293,99 @@ async function chat(message, uiHistory = [], userToken = null) {
   };
 }
 
-module.exports = { chat };
+// ── Streaming version ──────────────────────────────────────────────────────
+// Same agentic loop as chat() but streams final response tokens via SSE.
+// sendEvent(obj) — called by the route handler to write each SSE frame.
+// Returns { response, history, proposed_changes } for the terminal "done" event.
+
+async function chatStream(message, uiHistory = [], userToken = null, sendEvent) {
+  if (!process.env.LLM_API_KEY)
+    throw new Error("LLM_API_KEY not set — add it to .env");
+
+  const orgId = userToken || null;
+
+  const client = new OpenAI({
+    apiKey:  process.env.LLM_API_KEY,
+    baseURL: process.env.LLM_BASE_URL || "https://api.groq.com/openai/v1",
+  });
+
+  const model = process.env.LLM_MODEL || "llama-3.3-70b-versatile";
+
+  const messages = [
+    { role: "system", content: SYSTEM_PROMPT },
+    ...uiToOpenAIHistory(uiHistory),
+    { role: "user", content: message },
+  ];
+
+  let finalText      = "";
+  const proposedChanges = [];
+  let loopCount      = 0;
+
+  while (true) {
+    loopCount++;
+    const isLastRound = false; // determined by finish_reason below
+
+    // Non-streaming call first to handle tool calls
+    console.log(`[${new Date().toISOString()}] LLM stream call #${loopCount} — messages: ${messages.length}, org: ${orgId}`);
+
+    // Peek with non-streaming to check finish_reason
+    const peek = await client.chat.completions.create({
+      model,
+      tools: TOOLS,
+      tool_choice: "auto",
+      messages,
+    });
+
+    const choice = peek.choices[0];
+    console.log(`[${new Date().toISOString()}] LLM stream call #${loopCount} done — finish_reason: ${choice.finish_reason}${choice.message.tool_calls ? `, tools: ${choice.message.tool_calls.map(t=>t.function.name).join(", ")}` : ""}`);
+
+    if (choice.finish_reason === "tool_calls") {
+      // Handle tool calls normally, notify UI which tools are firing
+      messages.push(choice.message);
+      const toolResults = [];
+      for (const toolCall of (choice.message.tool_calls || [])) {
+        const input = JSON.parse(toolCall.function.arguments || "{}");
+        sendEvent({ type: "tool_call", name: toolCall.function.name });
+        let result;
+        if (toolCall.function.name === "propose_db_edit") {
+          try {
+            const patch = storePending({ org_id: orgId, ...input });
+            proposedChanges.push(patch);
+            result = { status: "proposed", change_id: patch.change_id, description: patch.description, preview: patch.preview, message: "Change queued. Admin must confirm before it is applied." };
+          } catch (err) {
+            result = { error: err.message };
+          }
+        } else {
+          result = await executeTool(toolCall.function.name, orgId, input);
+        }
+        toolResults.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(result) });
+      }
+      messages.push(...toolResults);
+      continue;
+    }
+
+    // finish_reason === "stop" — re-run with stream:true to get real token streaming
+    const stream = await client.chat.completions.create({
+      model,
+      messages,
+      stream: true,
+    });
+
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content;
+      if (delta) {
+        sendEvent({ type: "token", content: delta });
+        finalText += delta;
+      }
+    }
+
+    // Add completed assistant message to history
+    messages.push({ role: "assistant", content: finalText });
+    break;
+  }
+
+  const updatedHistory = appendUiTurns(uiHistory, message, finalText);
+  return { response: finalText, history: updatedHistory, proposed_changes: proposedChanges };
+}
+
+module.exports = { chat, chatStream };

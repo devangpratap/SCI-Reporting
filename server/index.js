@@ -19,7 +19,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const { getP8, getP9, getGraph, getP10, getP11, getP12, applyEdit } = require("./db");
-const { chat } = require("./chat");
+const { chat, chatStream } = require("./chat");
 const { getPending, removePending } = require("./edits");
 const { refreshReports, startAutoRefresh } = require("./reports");
 
@@ -42,10 +42,9 @@ app.get("/api/p10",      async (req, res) => res.json(await getP10(req.query.org
 app.get("/api/p11",      async (req, res) => res.json(await getP11(req.query.org_id)));
 app.get("/api/p12",      async (req, res) => res.json(await getP12(req.query.org_id)));
 
-// Bidirectional AI chat
-// Body:    { user_token: string, message: string, history: [{sender, message, timestamp}] }
-// Returns: { response: string, history: [{sender, message, timestamp}] }
-// UI sends full history back on every request — server is stateless
+// Bidirectional AI chat — full response (non-streaming)
+// Body:    { user_token, message, history: [{sender, message, timestamp}] }
+// Returns: { response, history, proposed_changes }
 app.post("/api/chat", async (req, res) => {
   const { user_token, message, history = [] } = req.body;
   if (!message?.trim()) return res.status(400).json({ error: "message required" });
@@ -55,6 +54,35 @@ app.post("/api/chat", async (req, res) => {
   } catch (err) {
     console.error("chat error:", err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Streaming AI chat — SSE, tokens arrive in real-time
+// Body:    same as /api/chat
+// Stream:  text/event-stream
+//   data: {"type":"token","content":"..."}          — partial token
+//   data: {"type":"tool_call","name":"..."}         — tool being called (UX hint)
+//   data: {"type":"done","response":"...","history":[...],"proposed_changes":[...]}
+//   data: {"type":"error","error":"..."}
+app.post("/api/chat/stream", async (req, res) => {
+  const { user_token, message, history = [] } = req.body;
+  if (!message?.trim()) return res.status(400).json({ error: "message required" });
+
+  res.setHeader("Content-Type",  "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection",    "keep-alive");
+  res.flushHeaders();
+
+  const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+
+  try {
+    const result = await chatStream(message, history, user_token, send);
+    send({ type: "done", ...result });
+  } catch (err) {
+    console.error("chat/stream error:", err.message);
+    send({ type: "error", error: err.message });
+  } finally {
+    res.end();
   }
 });
 
