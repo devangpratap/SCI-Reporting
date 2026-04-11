@@ -11,14 +11,16 @@
     GET  /api/p10       — task classifications
     GET  /api/p11       — integration gaps + simulation
     GET  /api/p12       — automation roadmap
-    POST /api/chat      — bidirectional AI chat (agentic loop via Claude + tool use)
+    POST /api/chat         — bidirectional AI chat; response includes proposed_changes[] when AI detects a DB edit intent
+    POST /api/chat/confirm — confirm or reject a pending DB change ({ change_id, approved, user_token })
 */
 
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-const { getP8, getP9, getGraph, getP10, getP11, getP12 } = require("./db");
+const { getP8, getP9, getGraph, getP10, getP11, getP12, applyEdit } = require("./db");
 const { chat } = require("./chat");
+const { getPending, removePending } = require("./edits");
 const { refreshReports, startAutoRefresh } = require("./reports");
 
 const app = express();
@@ -46,6 +48,49 @@ app.post("/api/chat", async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error("chat error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Chat-driven DB edits ────────────────────────────────────────────────────
+// Flow:
+//   1. POST /api/chat  →  AI calls propose_db_edit  →  response includes proposed_changes[]
+//   2. UI shows Yes/No per change
+//   3. POST /api/chat/confirm { change_id, approved, user_token }
+//      → approved=true  : executes the SQL, removes from pending, triggers report refresh
+//      → approved=false : discards the pending change, no-op on DB
+//
+// Body:    { change_id: string, approved: boolean, user_token?: string }
+// Returns: { change_id, status: "applied" | "rejected" }
+app.post("/api/chat/confirm", async (req, res) => {
+  const { change_id, approved, user_token } = req.body;
+  if (!change_id) return res.status(400).json({ error: "change_id required" });
+
+  const entry = getPending(change_id);
+  if (!entry) return res.status(404).json({ error: "Change not found or expired (30-min TTL)" });
+
+  // Org check — user_token is used as org_id throughout the reporting layer
+  const orgId = user_token || null;
+  if (entry.org_id && orgId && entry.org_id !== orgId)
+    return res.status(403).json({ error: "org mismatch — change belongs to a different org" });
+
+  if (!approved) {
+    removePending(change_id);
+    return res.json({ change_id, status: "rejected" });
+  }
+
+  try {
+    await applyEdit(entry);
+    removePending(change_id);
+
+    // Non-blocking: refresh static reports so Uvicorn picks up the new state
+    refreshReports(entry.org_id || null).catch(err =>
+      console.error("post-edit report refresh failed:", err.message)
+    );
+
+    res.json({ change_id, status: "applied" });
+  } catch (err) {
+    console.error("applyEdit error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });

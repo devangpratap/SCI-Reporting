@@ -228,4 +228,38 @@ async function getP12(orgId) {
   };
 }
 
-module.exports = { getP8, getP9, getGraph, getP10, getP11, getP12, getOrgIds };
+// ── Edit execution ─────────────────────────────────────────────────────────
+// Called by POST /api/chat/confirm after admin approves a proposed change.
+// Entry comes from edits.js storePending — table already allowlisted there.
+
+async function applyEdit({ org_id, table, operation, where_id, set_fields = {} }) {
+  // Belt-and-suspenders: strip anything that isn't a safe identifier character
+  const safeTable = table.replace(/[^a-z0-9_]/g, "");
+  const safeId    = (where_id  || "").replace(/'/g, "''");
+  const safeOrg   = (org_id    || "").replace(/'/g, "''");
+
+  if (!USE_DATABRICKS) {
+    // Mock mode — no persistent store to mutate, just log and succeed
+    console.log(`[mock] applyEdit: ${operation} on ${safeTable} id=${safeId} org=${safeOrg}`);
+    return { success: true, mode: "mock" };
+  }
+
+  if (operation === "delete") {
+    await queryDatabricks(
+      `DELETE FROM ${safeTable} WHERE id = '${safeId}' AND org_id = '${safeOrg}'`
+    );
+  } else {
+    // update
+    const setParts = Object.entries(set_fields)
+      .map(([k, v]) => `${k.replace(/[^a-z0-9_]/g, "")} = '${String(v ?? "").replace(/'/g, "''")}'`)
+      .join(", ");
+    if (!setParts) throw new Error("update requires at least one field in set_fields");
+    await queryDatabricks(
+      `UPDATE ${safeTable} SET ${setParts} WHERE id = '${safeId}' AND org_id = '${safeOrg}'`
+    );
+  }
+
+  return { success: true };
+}
+
+module.exports = { getP8, getP9, getGraph, getP10, getP11, getP12, getOrgIds, applyEdit };

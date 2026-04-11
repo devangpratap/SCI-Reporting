@@ -16,8 +16,15 @@
 
 const { OpenAI } = require("openai");
 const db = require("./db");
+const { storePending } = require("./edits");
 
 const SYSTEM_PROMPT = `You are an operations intelligence assistant for a B2B company.
+You also act as a database editor — when an admin describes a real-world change
+(e.g. "I spoke to the team, gap X is resolved" or "action item Y is done"), call
+propose_db_edit to queue the change for confirmation. Never edit the database
+directly — always use propose_db_edit so the admin can approve first.
+When proposing edits, tell the admin exactly what will change and ask them to confirm.
+
 You have access to live data across 5 operational verticals:
 - P8: Conversation state — decisions made, action items, blockers
 - P9: Stalls — tasks that have stopped moving and why
@@ -28,6 +35,56 @@ You have access to live data across 5 operational verticals:
 Use the tools to fetch current data before answering. Be concise and specific.
 When referencing data always include IDs, owners, severity, or team names — not vague summaries.
 If something is stalled or overdue say so directly.`;
+
+// ── propose_db_edit tool definition ───────────────────────────────────────
+const PROPOSE_EDIT_TOOL = {
+  type: "function",
+  function: {
+    name: "propose_db_edit",
+    description:
+      "Queue a database change for admin approval. Use when the admin describes a real-world update " +
+      "(resolved gap, completed action item, closed blocker, etc.). " +
+      "The change is NOT applied until the admin confirms it in the UI.",
+    parameters: {
+      type: "object",
+      required: ["table", "operation", "where_id", "description"],
+      properties: {
+        table: {
+          type: "string",
+          enum: [
+            "sci_p8_decisions",
+            "sci_p8_action_items",
+            "sci_p8_blockers",
+            "sci_p9_stalls",
+            "sci_p10_tasks",
+            "sci_p11_gaps",
+            "sci_p12_recommendations",
+          ],
+          description: "The table that contains the record to edit.",
+        },
+        operation: {
+          type: "string",
+          enum: ["update", "delete"],
+          description: "'update' to modify fields; 'delete' to remove the record.",
+        },
+        where_id: {
+          type: "string",
+          description: "The ID of the record to modify (the `id` column value).",
+        },
+        set_fields: {
+          type: "object",
+          description:
+            "For 'update': key-value pairs of columns to change, e.g. { \"status\": \"resolved\" }. " +
+            "Omit or leave empty for 'delete'.",
+        },
+        description: {
+          type: "string",
+          description: "One-sentence human-readable summary of the change shown to the admin.",
+        },
+      },
+    },
+  },
+};
 
 // OpenAI tool format (different from Anthropic — parameters not input_schema)
 const TOOLS = [
@@ -92,6 +149,7 @@ const TOOLS = [
       },
     },
   },
+  PROPOSE_EDIT_TOOL,
 ];
 
 // ── Tool execution ─────────────────────────────────────────────────────────
@@ -174,6 +232,8 @@ async function chat(message, uiHistory = [], userToken = null) {
   ];
 
   let finalText = "";
+  // Accumulates any propose_db_edit calls made during this turn
+  const proposedChanges = [];
 
   // Agentic loop — OpenAI finish_reason format
   while (true) {
@@ -196,7 +256,27 @@ async function chat(message, uiHistory = [], userToken = null) {
       const toolResults = [];
       for (const toolCall of (choice.message.tool_calls || [])) {
         const input = JSON.parse(toolCall.function.arguments || "{}");
-        const result = await executeTool(toolCall.function.name, orgId, input);
+        let result;
+
+        if (toolCall.function.name === "propose_db_edit") {
+          // Store pending change and return a descriptor to the model
+          try {
+            const patch = storePending({ org_id: orgId, ...input });
+            proposedChanges.push(patch);
+            result = {
+              status:      "proposed",
+              change_id:   patch.change_id,
+              description: patch.description,
+              preview:     patch.preview,
+              message:     "Change queued. Admin must confirm before it is applied.",
+            };
+          } catch (err) {
+            result = { error: err.message };
+          }
+        } else {
+          result = await executeTool(toolCall.function.name, orgId, input);
+        }
+
         toolResults.push({
           role:         "tool",
           tool_call_id: toolCall.id,
@@ -208,7 +288,12 @@ async function chat(message, uiHistory = [], userToken = null) {
   }
 
   const updatedHistory = appendUiTurns(uiHistory, message, finalText);
-  return { response: finalText, history: updatedHistory };
+  return {
+    response:         finalText,
+    history:          updatedHistory,
+    // Empty array when no edits proposed — additive, never breaks existing callers
+    proposed_changes: proposedChanges,
+  };
 }
 
 module.exports = { chat };
