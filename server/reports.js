@@ -81,6 +81,39 @@ function fmtP9({ stalls }) {
   return lines.join("\n");
 }
 
+function fmtGraph({ nodes, edges }) {
+  const critical  = nodes.filter(n => n.on_critical_path);
+  const stalled   = nodes.filter(n => n.is_stalled);
+  const lines     = ["# P9 — Dependency Graph\n"];
+
+  lines.push(`**${nodes.length} nodes · ${edges.length} edges · ${critical.length} on critical path · ${stalled.length} stalled**\n`);
+
+  lines.push("## Critical Path");
+  if (!critical.length) lines.push("No critical path nodes.");
+  critical.forEach(n =>
+    lines.push(`- **${n.label}** (${n.status})${n.is_stalled ? " ⚠ STALLED" : ""} — team: ${n.team ?? "unknown"}`)
+  );
+
+  if (stalled.length) {
+    lines.push("\n## Stalled Nodes");
+    stalled.forEach(n =>
+      lines.push(`- **${n.label}** — ${n.on_critical_path ? "ON critical path" : "off critical path"}, team: ${n.team ?? "unknown"}`)
+    );
+  }
+
+  lines.push("\n## All Nodes");
+  nodes.forEach(n =>
+    lines.push(`- ${n.label} (${n.status})${n.on_critical_path ? " [CRITICAL]" : ""}${n.is_stalled ? " [STALLED]" : ""}`)
+  );
+
+  lines.push("\n## Dependencies");
+  edges.forEach(e =>
+    lines.push(`- ${e.source} → ${e.target}${e.on_critical_path ? " [critical]" : ""}`)
+  );
+
+  return lines.join("\n");
+}
+
 function fmtP10({ tasks }) {
   const lines = ["# P10 — Workflow Map\n"];
   const byWorkflow = tasks.reduce((acc, t) => {
@@ -127,6 +160,11 @@ function overviewP9({ stalls }) {
   const high = stalls.filter(s => s.severity === "high").length;
   return `${stalls.length} stalls${high ? ` (${high} high severity)` : ""} · teams: ${[...new Set(stalls.flatMap(s => s.affected_teams ?? []))].join(", ") || "none"}`;
 }
+function overviewGraph({ nodes, edges }) {
+  const critical = nodes.filter(n => n.on_critical_path).length;
+  const stalled  = nodes.filter(n => n.is_stalled).length;
+  return `${nodes.length} nodes · ${edges.length} edges · ${critical} on critical path · ${stalled} stalled`;
+}
 function overviewP10({ tasks }) {
   const auto = tasks.filter(t => t.classification === "ASSEMBLY").length;
   return `${tasks.length} tasks · ${Math.round((auto / tasks.length) * 100)}% fully automatable · ${tasks.filter(t => t.classification === "JUDGMENT").length} require human judgment`;
@@ -143,16 +181,18 @@ function overviewP12({ recommendations }) {
 // ── Write all reports for one org ─────────────────────────────────────────
 
 async function writeOrgReports(orgId) {
-  const [p8, p9, p10, p11, p12] = await Promise.all([
-    db.getP8(orgId), db.getP9(orgId), db.getP10(orgId), db.getP11(orgId), db.getP12(orgId),
+  const [p8, p9, graph, p10, p11, p12] = await Promise.all([
+    db.getP8(orgId), db.getP9(orgId), db.getGraph(orgId),
+    db.getP10(orgId), db.getP11(orgId), db.getP12(orgId),
   ]);
 
   const reports = [
-    { contents: fmtP8(p8),   simple_overview: overviewP8(p8)   },
-    { contents: fmtP9(p9),   simple_overview: overviewP9(p9)   },
-    { contents: fmtP10(p10), simple_overview: overviewP10(p10) },
-    { contents: fmtP11(p11), simple_overview: overviewP11(p11) },
-    { contents: fmtP12(p12), simple_overview: overviewP12(p12) },
+    { contents: fmtP8(p8),       simple_overview: overviewP8(p8)       },
+    { contents: fmtP9(p9),       simple_overview: overviewP9(p9)       },
+    { contents: fmtGraph(graph), simple_overview: overviewGraph(graph)  },
+    { contents: fmtP10(p10),     simple_overview: overviewP10(p10)     },
+    { contents: fmtP11(p11),     simple_overview: overviewP11(p11)     },
+    { contents: fmtP12(p12),     simple_overview: overviewP12(p12)     },
   ];
 
   const pool = getPool();
