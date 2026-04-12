@@ -56,13 +56,12 @@ async function query(sql, params = []) {
 
 // ── Shared SQL fragments ───────────────────────────────────────────────────
 // Workflow resolver: provenance → communication title, then parent task title,
-// then fall back to 'Standalone'. This groups ingestion-flat tasks into their
+// then fall back to 'Standalone'. Groups ingestion-flat tasks into their
 // originating workflow context even when parent_task_id is not set.
 const WORKFLOW_LATERAL = `
   LEFT JOIN LATERAL (
-    SELECT c.title         AS wf_title,
-           c.id            AS wf_comm_id,
-           pv.source_comm_id
+    SELECT c.title AS wf_title,
+           c.id    AS wf_comm_id
     FROM   public.provenance     pv
     JOIN   public.communications c ON pv.source_comm_id = c.id
     WHERE  pv.item_id = t.id
@@ -76,27 +75,19 @@ const WORKFLOW_LATERAL = `
   ) par ON true
 `;
 
-// Relevance score: composite of type priority, status urgency, deadline proximity,
-// and downstream blocked task count. Higher = more important.
-// Max theoretical score ≈ 4+3+3+5 = 15.
+// Relevance score: status urgency + deadline proximity + downstream impact.
+// Type-agnostic — works regardless of whether ingestion sets a type column.
+// Max theoretical score ≈ 3+3+5 = 11.
 const RELEVANCE_SCORE = `
   (
-    CASE t.type
-      WHEN 'blocker'     THEN 4
-      WHEN 'decision'    THEN 3
-      WHEN 'action_item' THEN 2
-      ELSE 1
-    END
-    +
     CASE t.status
-      WHEN 'blocked'     THEN 3
+      WHEN 'in_progress' THEN 3
       WHEN 'pending'     THEN 2
-      WHEN 'in_progress' THEN 1
       ELSE 0
     END
     +
     CASE
-      WHEN t.deadline IS NOT NULL AND t.deadline::date < CURRENT_DATE             THEN 3
+      WHEN t.deadline IS NOT NULL AND t.deadline::date < CURRENT_DATE                       THEN 3
       WHEN t.deadline IS NOT NULL AND t.deadline::date <= CURRENT_DATE + INTERVAL '7 days'  THEN 2
       WHEN t.deadline IS NOT NULL AND t.deadline::date <= CURRENT_DATE + INTERVAL '30 days' THEN 1
       ELSE 0
@@ -112,8 +103,7 @@ const RELEVANCE_SCORE = `
   )
 `;
 
-// Source citation: primary ref is the task row; secondary ref is the originating
-// communication when available.
+// Source citation: primary ref is the task row; secondary ref is originating comm.
 const SOURCE_REF = `
   'public.tasks.id = ' || t.id AS source_ref,
   CASE WHEN wf.wf_comm_id IS NOT NULL
@@ -125,6 +115,21 @@ const SOURCE_REF = `
 // Workflow label
 const WORKFLOW_LABEL = `
   COALESCE(wf.wf_title, par.parent_title, 'Standalone') AS workflow
+`;
+
+// Derived classification — type-agnostic.
+// Tasks that unblock others (have downstream edges) → JUDGMENT (orchestrators).
+// Tasks with a parent → ASSEMBLY (leaf subtasks).
+// Everything else → ASSEMBLY_JUDGMENT.
+const CLASSIFICATION = `
+  CASE
+    WHEN EXISTS (
+      SELECT 1 FROM public.edges e3
+      WHERE e3.source_task_id = t.id
+    ) THEN 'JUDGMENT'
+    WHEN t.parent_task_id IS NOT NULL THEN 'ASSEMBLY'
+    ELSE 'ASSEMBLY_JUDGMENT'
+  END
 `;
 
 // ── Org helpers ────────────────────────────────────────────────────────────
@@ -144,90 +149,50 @@ async function getState(orgId) {
   const w = orgId ? "AND t.org_id = $1" : "";
   const p = orgId ? [orgId] : [];
 
-  const [decisions, action_items, blockers] = await Promise.all([
+  const all = await query(`
+    SELECT t.id, t.org_id,
+           t.title,
+           COALESCE(t.description, t.title)                                      AS description,
+           t.status,
+           t.deadline,
+           t.parent_task_id,
+           COALESCE(MIN(i.display_name), 'Unassigned')                           AS owner,
+           COALESCE(array_agg(DISTINCT i.display_name)
+             FILTER (WHERE i.display_name IS NOT NULL), ARRAY[]::text[])         AS participants,
+           COALESCE(array_agg(DISTINCT e.target_task_id)
+             FILTER (WHERE e.target_task_id IS NOT NULL), ARRAY[]::text[])       AS blocking,
+           ${WORKFLOW_LABEL},
+           ${SOURCE_REF},
+           ${RELEVANCE_SCORE}                                                     AS relevance_score,
+           COALESCE((
+             SELECT COUNT(*)::int FROM public.edges e2
+             JOIN public.tasks bt ON e2.target_task_id = bt.id
+             WHERE e2.source_task_id = t.id AND bt.status != 'completed'
+           ), 0)                                                                  AS downstream_blocked_count,
+           ${CLASSIFICATION}                                                      AS classification
+    FROM public.tasks t
+    ${WORKFLOW_LATERAL}
+    LEFT JOIN public.task_owners o ON t.id = o.task_id
+    LEFT JOIN public.identities  i ON o.identity_id = i.id
+    LEFT JOIN public.edges       e ON e.source_task_id = t.id
+    WHERE 1=1 ${w}
+    GROUP BY t.id, t.org_id, t.title, t.description, t.status, t.deadline,
+             t.parent_task_id, wf.wf_title, wf.wf_comm_id, par.parent_title
+    ORDER BY relevance_score DESC
+  `, p);
 
-    query(`
-      SELECT t.id, t.org_id,
-             t.title                                                              AS summary,
-             COALESCE(t.description, t.title)                                    AS rationale,
-             t.status,
-             t.deadline                                                           AS timestamp,
-             COALESCE(array_agg(DISTINCT i.display_name)
-               FILTER (WHERE i.display_name IS NOT NULL), ARRAY[]::text[])       AS participants,
-             ${WORKFLOW_LABEL},
-             ${SOURCE_REF},
-             ${RELEVANCE_SCORE}                                                   AS relevance_score,
-             COALESCE((
-               SELECT COUNT(*)::int FROM public.edges e2
-               JOIN public.tasks bt ON e2.target_task_id = bt.id
-               WHERE e2.source_task_id = t.id AND bt.status != 'completed'
-             ), 0)                                                                AS downstream_blocked_count
-      FROM public.tasks t
-      ${WORKFLOW_LATERAL}
-      LEFT JOIN public.task_owners o ON t.id = o.task_id
-      LEFT JOIN public.identities  i ON o.identity_id = i.id
-      WHERE t.type = 'decision' ${w}
-      GROUP BY t.id, t.org_id, t.title, t.description, t.status, t.deadline,
-               wf.wf_title, wf.wf_comm_id, par.parent_title
-      ORDER BY relevance_score DESC
-    `, p),
+  // Derive categories from structure since type column may not exist
+  const in_progress = all.filter(t => t.status === 'in_progress');
+  const pending     = all.filter(t => t.status === 'pending');
+  const completed   = all.filter(t => t.status === 'completed');
+  // Blockers = pending/in_progress tasks that are blocking downstream work
+  const blockers    = all.filter(t => t.status !== 'completed' && t.downstream_blocked_count > 0);
+  // Decisions = high-level tasks with multiple downstream tasks (orchestrators)
+  const decisions   = all.filter(t => t.classification === 'JUDGMENT' && t.status !== 'completed');
+  // Action items = everything active that isn't a decision
+  const action_items = all.filter(t => t.status !== 'completed' && t.classification !== 'JUDGMENT');
 
-    query(`
-      SELECT t.id, t.org_id,
-             t.title                                                              AS description,
-             t.status,
-             t.deadline,
-             COALESCE(MIN(i.display_name), 'Unassigned')                         AS owner,
-             COALESCE(array_agg(DISTINCT e.target_task_id)
-               FILTER (WHERE e.target_task_id IS NOT NULL), ARRAY[]::text[])     AS blocking,
-             ${WORKFLOW_LABEL},
-             ${SOURCE_REF},
-             ${RELEVANCE_SCORE}                                                   AS relevance_score,
-             COALESCE((
-               SELECT COUNT(*)::int FROM public.edges e2
-               JOIN public.tasks bt ON e2.target_task_id = bt.id
-               WHERE e2.source_task_id = t.id AND bt.status != 'completed'
-             ), 0)                                                                AS downstream_blocked_count
-      FROM public.tasks t
-      ${WORKFLOW_LATERAL}
-      LEFT JOIN public.task_owners o ON t.id = o.task_id
-      LEFT JOIN public.identities  i ON o.identity_id = i.id
-      LEFT JOIN public.edges       e ON e.source_task_id = t.id
-      WHERE t.type = 'action_item' ${w}
-      GROUP BY t.id, t.org_id, t.title, t.status, t.deadline,
-               wf.wf_title, wf.wf_comm_id, par.parent_title
-      ORDER BY relevance_score DESC
-    `, p),
-
-    query(`
-      SELECT t.id, t.org_id,
-             t.title                                                              AS description,
-             t.status,
-             t.deadline                                                           AS timestamp,
-             COALESCE(MIN(i.display_name), 'Unassigned')                         AS raised_by,
-             COALESCE(array_agg(DISTINCT e.target_task_id)
-               FILTER (WHERE e.target_task_id IS NOT NULL), ARRAY[]::text[])     AS blocking,
-             ${WORKFLOW_LABEL},
-             ${SOURCE_REF},
-             ${RELEVANCE_SCORE}                                                   AS relevance_score,
-             COALESCE((
-               SELECT COUNT(*)::int FROM public.edges e2
-               JOIN public.tasks bt ON e2.target_task_id = bt.id
-               WHERE e2.source_task_id = t.id AND bt.status != 'completed'
-             ), 0)                                                                AS downstream_blocked_count
-      FROM public.tasks t
-      ${WORKFLOW_LATERAL}
-      LEFT JOIN public.task_owners o ON t.id = o.task_id
-      LEFT JOIN public.identities  i ON o.identity_id = i.id
-      LEFT JOIN public.edges       e ON e.source_task_id = t.id
-      WHERE t.type = 'blocker' ${w}
-      GROUP BY t.id, t.org_id, t.title, t.status, t.deadline,
-               wf.wf_title, wf.wf_comm_id, par.parent_title
-      ORDER BY relevance_score DESC
-    `, p),
-  ]);
-
-  return { decisions, action_items, blockers };
+  return { decisions, action_items, blockers, in_progress, pending, completed };
 }
 
 // ── Critical-Path Stalls ───────────────────────────────────────────────────
@@ -245,11 +210,12 @@ async function getStalls(orgId) {
   const stalls = await query(`
     SELECT t.id, t.org_id,
            t.title                                                               AS description,
-           t.type                                                                AS stall_type,
+           t.status                                                              AS stall_type,
            t.deadline                                                            AS unresponsive_since,
            CASE
              WHEN t.deadline IS NOT NULL AND t.deadline::date < CURRENT_DATE    THEN 'high'
-             WHEN t.deadline IS NOT NULL                                         THEN 'medium'
+             WHEN t.deadline IS NOT NULL AND
+                  t.deadline::date <= CURRENT_DATE + INTERVAL '7 days'          THEN 'medium'
              ELSE 'low'
            END                                                                   AS severity,
            COALESCE(array_agg(DISTINCT i.role)
@@ -267,8 +233,11 @@ async function getStalls(orgId) {
     ${WORKFLOW_LATERAL}
     LEFT JOIN public.task_owners o ON t.id = o.task_id
     LEFT JOIN public.identities  i ON o.identity_id = i.id
-    WHERE t.status = 'blocked' ${w}
-    GROUP BY t.id, t.org_id, t.title, t.type, t.deadline, t.description,
+    WHERE t.status IN ('pending', 'in_progress')
+      AND t.deadline IS NOT NULL
+      AND t.deadline::date < CURRENT_DATE
+      ${orgId ? "AND t.org_id = $1" : ""}
+    GROUP BY t.id, t.org_id, t.title, t.status, t.deadline, t.description,
              wf.wf_title, wf.wf_comm_id, par.parent_title
     ORDER BY relevance_score DESC
   `, p);
@@ -297,7 +266,7 @@ async function getGraph(orgId) {
         SELECT DISTINCT ON (t.id)
                t.id, t.title AS label,
                COALESCE(i.role, 'Unknown') AS team,
-               t.status, t.type,
+               t.status,
                COALESCE(wf.wf_title, par.parent_title, 'Standalone') AS workflow,
                'public.tasks.id = ' || t.id AS source_ref
         FROM public.tasks t
@@ -382,31 +351,20 @@ async function getWorkflows(orgId) {
     SELECT DISTINCT ON (t.id)
            t.id, t.org_id,
            t.title                                                               AS description,
-           t.type,
            t.status,
            COALESCE(i.role, 'Operations')                                        AS role,
            ${WORKFLOW_LABEL},
            ${SOURCE_REF},
-           CASE t.type
-             WHEN 'decision'    THEN 'JUDGMENT'
-             WHEN 'blocker'     THEN 'JUDGMENT'
-             WHEN 'action_item' THEN
-               CASE WHEN t.status = 'completed' THEN 'ASSEMBLY'
-                    ELSE 'ASSEMBLY_JUDGMENT' END
-             WHEN 'milestone'   THEN 'ASSEMBLY_JUDGMENT'
-             ELSE 'ASSEMBLY_JUDGMENT'
-           END                                                                   AS classification,
-           CASE t.type
-             WHEN 'decision'    THEN 0.95
-             WHEN 'blocker'     THEN 0.90
-             WHEN 'action_item' THEN
-               CASE WHEN t.status = 'completed' THEN 0.85 ELSE 0.75 END
-             WHEN 'milestone'   THEN 0.70
-             ELSE 0.65
+           ${CLASSIFICATION}                                                      AS classification,
+           CASE
+             WHEN EXISTS (SELECT 1 FROM public.edges e3 WHERE e3.source_task_id = t.id)
+               THEN 0.90
+             WHEN t.parent_task_id IS NOT NULL THEN 0.80
+             ELSE 0.70
            END                                                                   AS confidence,
-           CASE t.type
-             WHEN 'decision' THEN ARRAY['Strategic judgment required']::text[]
-             WHEN 'blocker'  THEN ARRAY['External dependency', 'Risk assessment']::text[]
+           CASE
+             WHEN EXISTS (SELECT 1 FROM public.edges e3 WHERE e3.source_task_id = t.id)
+               THEN ARRAY['Unblocks downstream work', 'Coordination required']::text[]
              ELSE ARRAY[]::text[]
            END                                                                   AS decision_points,
            ${RELEVANCE_SCORE}                                                    AS relevance_score
@@ -493,7 +451,12 @@ async function getGaps(orgId) {
     LEFT JOIN public.tasks        bt    ON e.target_task_id = bt.id
     LEFT JOIN public.task_owners  tgt_o ON bt.id = tgt_o.task_id
     LEFT JOIN public.identities   tgt_i ON tgt_o.identity_id = tgt_i.id
-    WHERE b.type = 'blocker' AND b.status = 'blocked' ${w}
+    WHERE b.status IN ('pending', 'in_progress')
+      AND EXISTS (
+        SELECT 1 FROM public.edges e3
+        JOIN public.tasks bt ON e3.target_task_id = bt.id
+        WHERE e3.source_task_id = b.id AND bt.status != 'completed'
+      ) ${orgId ? "AND b.org_id = $1" : ""}
     GROUP BY b.id, b.org_id, b.title, b.description, b.deadline,
              wf.wf_title, wf.wf_comm_id, par.parent_title
     ORDER BY relevance_score DESC, staff_hours_lost_per_month DESC
@@ -532,12 +495,13 @@ async function getRoadmap(orgId) {
   const p = orgId ? [orgId] : [];
 
   const rows = await query(`
-    SELECT t.id, t.org_id, t.title, t.type, t.status, t.deadline,
+    SELECT t.id, t.org_id, t.title, t.status, t.deadline,
            COALESCE(t.description, 'Requires attention')                         AS rationale,
-           CASE t.type
-             WHEN 'blocker'  THEN 'integrate'
-             WHEN 'decision' THEN 'preserve'
-             ELSE 'automate'
+           CASE
+             WHEN EXISTS (SELECT 1 FROM public.edges e3 WHERE e3.source_task_id = t.id)
+               THEN 'integrate'
+             WHEN t.parent_task_id IS NOT NULL THEN 'automate'
+             ELSE 'preserve'
            END                                                                    AS type,
            COALESCE(wf.wf_title, par.parent_title, 'Standalone')                 AS workflow,
            'public.tasks.id = ' || t.id                                          AS source_ref,
@@ -553,12 +517,11 @@ async function getRoadmap(orgId) {
            ), 0))                                                                 AS estimated_hours_saved_per_month,
            'High'                                                                 AS estimated_roi,
            NULL::text                                                             AS linked_gap,
-           -- roadmap score: same composite as main relevance
+           -- roadmap score: same composite as main relevance (type-agnostic)
            (
-             CASE t.type     WHEN 'blocker' THEN 4 WHEN 'decision' THEN 3 WHEN 'action_item' THEN 2 ELSE 1 END +
-             CASE t.status   WHEN 'blocked' THEN 3 WHEN 'pending'  THEN 2 WHEN 'in_progress' THEN 1 ELSE 0 END +
+             CASE t.status   WHEN 'in_progress' THEN 3 WHEN 'pending' THEN 2 ELSE 0 END +
              CASE
-               WHEN t.deadline IS NOT NULL AND t.deadline::date < CURRENT_DATE             THEN 3
+               WHEN t.deadline IS NOT NULL AND t.deadline::date < CURRENT_DATE                       THEN 3
                WHEN t.deadline IS NOT NULL AND t.deadline::date <= CURRENT_DATE + INTERVAL '7 days'  THEN 2
                WHEN t.deadline IS NOT NULL AND t.deadline::date <= CURRENT_DATE + INTERVAL '30 days' THEN 1
                ELSE 0
